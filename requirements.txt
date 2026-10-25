@@ -6,3 +6,5 @@ pytest>=8,<10
 joblib>=1.4,<2
 tzdata>=2024.1,<2027
 kafka-python==2.2.15
+streamlit==1.66.1
+plotly==7.1.0

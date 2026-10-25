@@ -135,6 +135,30 @@ It compares a prior baseline, Logistic Regression, HistGradientBoosting, Random 
 
 Open `artifacts/model_benchmark/report.html` for the SVG charts, metric table, and interactive model explorer. The explorer ranks models by a selected metric, lets you focus on any candidate, refreshes `metrics.json` every 30 seconds when served, and keeps an embedded snapshot for file viewing. `report_preview.png` is a static image preview. Machine-readable results and reproducibility artifacts are saved alongside them: `metrics.json`, `cv_results.csv`, `development_oof_predictions.csv`, `held_out_test_predictions.csv`, and `models.joblib`.
 
+### Streamlit reporting workspace
+
+An additional reporting workspace adapts the DataIQ housing project's workflow: executive summary, interactive Plotly comparisons and diagnostics, learning-size analysis, dataset/split evidence, and report downloads. It reads the saved benchmark artifacts without retraining or replacing Kibana.
+
+```bash
+uv pip install --python .venv/Scripts/python.exe -r requirements-report.txt
+.venv/Scripts/python.exe -m streamlit run streamlit_app.py --server.address 127.0.0.1 --server.port 8502
+```
+
+Open `http://127.0.0.1:8502`. Local serving uses explicit loopback-only flags; shared Streamlit config does not force a host-specific bind or port, so cloud hosting can manage them. A clean clone uses the real, identifier-free snapshot in `report_data/`. If local benchmark artifacts exist, they take precedence; `CYBERLAB_BENCHMARK_DIR` can select another trusted directory. On Linux/macOS substitute `.venv/bin/python`. See `docs/reporting-reference.md` for the adapted patterns and deliberate differences. No reference-project files or data are modified.
+
+### Streamlit Community Cloud
+
+Create an app with these settings:
+
+- Repository: `RayenBelhadj123/cyber-threat-lab`
+- Branch: `main`
+- Main file path: `streamlit_app.py`
+- Python: `3.12`
+
+Root `requirements.txt` includes the reporting dependencies. The app loads `report_data/` on a clean clone, so it does not need local Docker services, raw training data, PyTorch, or serialized models. This is a read-only benchmark report, not a cloud deployment of Elasticsearch/Kibana. Local training artifacts and network identities remain excluded from Git. The committed snapshot is derived from the actual benchmark; it is not synthetic.
+
+### Native Kibana report
+
 To publish the benchmark results as a **native Kibana dashboard** (not an HTML iframe), run:
 
 ```bash
