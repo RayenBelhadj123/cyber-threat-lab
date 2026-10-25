@@ -179,6 +179,8 @@ def workspace_report(ctx,include_numeric=True,include_dictionary=True,include_cl
     if ctx['source_name']=='CICIDS2017 real feature snapshot':
         lines.extend(['The bundled source contains 68 positive host/minute windows from one source host and one continuous attack episode.',
                       'Downloaded full-week CICIDS2017 and CIC-DDoS2019 extensions are not silently merged into this snapshot.'])
+    if ctx.get('data_scope'):
+        lines.extend(['','## Input scope',ctx['data_scope']])
     if include_cleaning:
         lines+=['','## Cleaning audit',_table_markdown(pd.DataFrame(ctx['cleaning_audit']))]
     if include_models:
@@ -203,8 +205,15 @@ def workspace_report(ctx,include_numeric=True,include_dictionary=True,include_cl
         lines+=['','## Data dictionary',_table_markdown(dictionary,200)]
     markdown='\n\n'.join(lines)
     # Escape all dataset-derived text; no arbitrary HTML/code execution.
-    html='<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CyberLab analytics report</title><style>body{font:15px system-ui;max-width:1100px;margin:2rem auto;padding:1rem;background:#081426;color:#e6eefb}pre{white-space:pre-wrap;overflow-wrap:anywhere}h1{color:#37d7b7}</style></head><body><h1>CyberLab analytics evidence</h1><pre>'+escape(markdown)+'</pre></body></html>'
+    html='<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CyberLab analytics report</title><style>body{font:15px system-ui;max-width:1100px;margin:2rem auto;padding:1rem;background:#ffffff;color:#0f172a}pre{white-space:pre-wrap;overflow-wrap:anywhere}h1{color:#0f172a}</style></head><body><h1>CyberLab analytics evidence</h1><pre>'+escape(markdown)+'</pre></body></html>'
     return markdown,html
+
+
+def default_workspace_provenance(root):
+    path=Path(root)/'report_data/workspace_provenance.json'
+    record=json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    record.setdefault('workspace_label','CICIDS2017 real feature snapshot')
+    return record
 
 
 def render_workspace(project_root):
@@ -212,7 +221,8 @@ def render_workspace(project_root):
     root=Path(project_root)
     with st.sidebar.expander('Dataset & project setup',expanded=False):
         upload=st.file_uploader('Upload CSV (25 MB / 50,000 rows maximum)',type=['csv'],key='workspace_upload')
-        source_name=upload.name if upload is not None else 'CICIDS2017 real feature snapshot'
+        default_scope=default_workspace_provenance(root)
+        source_name=upload.name if upload is not None else default_scope['workspace_label']
         try:
             raw=read_workspace_csv(upload.getvalue()) if upload is not None else load_default_workspace(root)
         except (ValueError,pd.errors.ParserError,pd.errors.EmptyDataError) as exc:
@@ -239,7 +249,8 @@ def render_workspace(project_root):
     ctx={'df':df,'raw_df':raw,'target':target,'date_col':date_col,'features':selected_features,
          'project_name':project_name,'source_name':source_name,'mode':mode,
          'fingerprint':dataset_fingerprint(df,target,date_col,selected_features),
-         'cleaning_audit':st.session_state.get('workspace_cleaning_audit',[]),'project_root':str(root)}
+         'cleaning_audit':st.session_state.get('workspace_cleaning_audit',[]),'project_root':str(root),
+         'data_scope':default_scope.get('scope') if upload is None else 'User-uploaded dataset; source/label provenance requires review.'}
     previous=st.session_state.get('workspace_fingerprint')
     if previous and previous!=ctx['fingerprint']:
         st.session_state.pop('workspace_model_result',None)
@@ -260,6 +271,8 @@ def render_workspace(project_root):
     st.title(page)
     if source_name=='CICIDS2017 real feature snapshot':
         st.warning('Demo evidence: Thursday-only real feature windows, 68 positives from one host/episode. Additional downloaded datasets are separate; no improved detection is implied.')
+    elif upload is None and default_scope.get('scope'):
+        st.info(default_scope['scope'])
     if mode=='Beginner':
         st.caption('Workflow: inspect data → clean with an audit → choose independent splits → compare models → inspect mistakes → export evidence.')
     elif mode=='Business Manager':

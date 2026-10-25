@@ -14,7 +14,7 @@ def test_streamlit_deployment_uses_reference_run_mode_but_local_only():
     assert config['server']['runOnSave'] is True
     assert config['server']['headless'] is True
     assert config['browser']['gatherUsageStats'] is False
-    assert config['theme']['base'] == 'dark'
+    assert config['theme']['base'] == 'light'
     requirements = (ROOT / 'requirements-report.txt').read_text(encoding='utf-8')
     assert 'streamlit==' in requirements
     assert 'plotly==' in requirements

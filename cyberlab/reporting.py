@@ -94,6 +94,32 @@ def diagnostics(bundle, model, split):
     }
 
 
+def governance_lines(metrics):
+    """Describe only recorded scope/policies, including extensible provenance fields."""
+    dataset, split = metrics["dataset"], metrics["split"]
+    lines = [
+        f"Dataset: {dataset['description']}",
+        f"Input flow rows: {dataset['input_rows']}; valid flows: {dataset['valid_flows']}.",
+        f"Windows: {dataset['window_count']}; positive windows: {dataset['positive_windows']}.",
+        f"Split: {split['method']}.",
+        f"Temporal policy: {split['temporal_policy']}.",
+        f"Recorded inner folds: {len(split['inner_folds'])}.",
+        f"Selection: {metrics['selection']['primary_metric']}.",
+        f"Threshold policy: {metrics['selection']['threshold_policy']}",
+        "No retraining is performed by this report.",
+    ]
+    # Keep new source manifests/capture boundaries visible without assuming a
+    # specific producer's provenance schema or silently omitting saved evidence.
+    for label, record, displayed in (
+        ("Dataset evidence / provenance", dataset, {"description", "input_rows", "valid_flows", "window_count", "positive_windows"}),
+        ("Split evidence", split, {"method", "temporal_policy", "inner_folds"}),
+    ):
+        lines.extend(f"{label} — {key}: {json.dumps(value, ensure_ascii=False)}"
+                     for key, value in record.items() if key not in displayed)
+    lines.extend(f"- {caveat}" for caveat in metrics["caveats"])
+    return lines
+
+
 def build_report(bundle, include_comparison=True, include_learning=True, title="Cyber Threat Lab | Benchmark report"):
     """Portable Markdown and escaped standalone HTML with mandatory limitations."""
     metrics = bundle.metrics
@@ -107,13 +133,8 @@ def build_report(bundle, include_comparison=True, include_learning=True, title="
              f"Held-out test AP: {test['average_precision']:.6f}; precision: {test['precision']:.6f}; recall: {test['recall']:.6f}; F1: {test['f1']:.6f}.",
              f"Held-out counts: TN={cm['tn']}, FP={cm['fp']}, FN={cm['fn']}, TP={cm['tp']}.",
              f"Frozen development-OOF threshold: {model['threshold_from_dev_oof_max_f1']:.9f}.",
-             "", "## Governance",
-             f"Dataset: {metrics['dataset']['description']}",
-             f"Windows: {metrics['dataset']['window_count']}; positive windows: {metrics['dataset']['positive_windows']}.",
-             f"Split: {metrics['split']['method']}.",
-             "Shuffled grouped holdout, not forward temporal validation. No retraining is performed by this report.",
-             f"Threshold policy: {metrics['selection']['threshold_policy']}"]
-    lines.extend(f"- {caveat}" for caveat in metrics["caveats"])
+             "", "## Governance"]
+    lines.extend(governance_lines(metrics))
     if include_comparison:
         lines.extend(["", "## Model comparison", "Ranked by mean grouped CV average precision; test is descriptive only.", "", "| Model | CV AP | Fold SD | Test AP |", "|---|---:|---:|---:|"])
         for row in comparison_table(metrics).to_dict("records"):
@@ -148,6 +169,6 @@ def build_report(bundle, include_comparison=True, include_learning=True, title="
     if in_table:
         blocks.append("</tbody></table>")
     html = ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<title>{escape(title)}</title><style>body{{background:#081426;color:#e5efff;font:16px system-ui;max-width:1050px;margin:48px auto;padding:24px}}h1,h2{{color:#4edbc1}}p{{white-space:pre-wrap;overflow-wrap:anywhere}}table{{border-collapse:collapse;width:100%;margin:20px 0}}th,td{{padding:12px;text-align:left;border-bottom:1px solid #25475b}}th{{background:#10233b;color:#4edbc1}}</style></head><body>'
+            f'<title>{escape(title)}</title><style>body{{background:#ffffff;color:#0f172a;font:16px system-ui;max-width:1050px;margin:48px auto;padding:24px}}h1,h2{{color:#0f172a}}p{{white-space:pre-wrap;overflow-wrap:anywhere}}table{{border-collapse:collapse;width:100%;margin:20px 0}}th,td{{padding:12px;text-align:left;border-bottom:1px solid #e2e8f0}}th{{background:#f8fafc;color:#334155}}</style></head><body>'
             + "\n".join(blocks) + "</body></html>")
     return markdown, html

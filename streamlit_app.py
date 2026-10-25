@@ -12,21 +12,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from cyberlab.reporting import ArtifactError, build_report, comparison_table, diagnostics, load_benchmark, resolve_artifact_directory
+from cyberlab.reporting import ArtifactError, build_report, comparison_table, diagnostics, governance_lines, load_benchmark, resolve_artifact_directory
 
 st.set_page_config(page_title="Cyber Threat Lab | Evidence workspace", page_icon="🛡️", layout="wide")
-st.markdown("""<style>
-.stApp {background:#081426;color:#e6eefb}
-[data-testid="stSidebar"] {background:#0d1d34;border-right:1px solid #233b54}
-[data-testid="stMetric"] {background:#10233b;border:1px solid #25475b;border-top:3px solid #37d7b7;border-radius:12px;padding:18px}
-h1,h2,h3 {letter-spacing:-.025em} [data-testid="stCaptionContainer"] {color:#a5b8d0}
-.block-container {padding-top:2rem;max-width:1600px}
-</style>""", unsafe_allow_html=True)
+from cyberlab.ui_theme import apply_theme, style_chart
+apply_theme()
 
 SECTIONS = ("Executive summary", "Model comparison", "Model diagnostics", "Learning curve", "Dataset & governance", "Report generator")
-st.sidebar.markdown("## 🛡️ CYBER THREAT LAB")
-st.sidebar.caption("BENCHMARK / EVIDENCE WORKSPACE")
-data_mode = st.sidebar.segmented_control("Data mode", ["Reports", "Run data", "Live data"], default="Reports", key="cyber_detection_mode")
+st.sidebar.markdown("## 🛡️ Cyber Threat Lab")
+st.sidebar.caption("Data · Detection · Evidence")
+data_mode = st.sidebar.segmented_control("Data mode", ["Reports", "Run data", "Live data"], default="Reports", key="cyber_detection_mode", width="stretch", wrap=False)
 if data_mode in ("Run data", "Live data"):
     from cyberlab.live_detection import render_detection
     render_detection(Path(__file__).resolve().parent, data_mode)
@@ -52,18 +47,21 @@ selected = m["selection"]["model"]
 selected_model = m["models"][selected]
 test = selected_model["test_metrics"]
 table = comparison_table(m)
-st.caption("CYBERSECURITY ANALYTICS / CICIDS2017 / SAVED BENCHMARK")
+st.caption("CYBERSECURITY ANALYTICS / SAVED BENCHMARK")
 st.title(section)
-st.warning(f"Exploratory evidence only: {m['dataset']['positive_windows']} positive windows, one attack source and one episode. Shuffled grouped holdout is not forward temporal validation.")
+st.caption(m["dataset"]["description"])
+with st.expander("Dataset scope & validation limits", expanded=False):
+    st.caption(f"Split: {m['split']['method']} • Temporal policy: {m['split']['temporal_policy']}")
+    st.warning("Exploratory evidence only; saved benchmark limitations:\n\n" + "\n\n".join(m["caveats"]))
 
 
 def show_chart(fig):
-    fig.update_layout(template="plotly_dark", paper_bgcolor="#081426", plot_bgcolor="#0d1d34", font_color="#dceafb", colorway=["#37d7b7", "#6ca7ff", "#ffbc70"], margin=dict(t=60, b=40, l=30, r=25), legend=dict(orientation="h", y=-.22))
+    style_chart(fig)
     st.plotly_chart(fig, width="stretch", config={"displaylogo": False})
 
 
 if section == "Executive summary":
-    st.markdown("### A candidate worth investigating — not a deployment verdict")
+    st.markdown("### Benchmark overview")
     a, b, c, d = st.columns(4)
     a.metric("Selected by grouped CV", selected)
     b.metric("Mean CV average precision", f"{selected_model['mean_cv_average_precision']:.3f}")
@@ -73,7 +71,7 @@ if section == "Executive summary":
     with left:
         cm = test["confusion_matrix"]
         outcomes = pd.DataFrame({"Outcome": ["Detected attacks", "Missed attacks", "False alerts"], "Windows": [cm["tp"], cm["fn"], cm["fp"]]})
-        show_chart(px.bar(outcomes, x="Outcome", y="Windows", text="Windows", title="Held-out alert outcomes · frozen threshold", color="Outcome", color_discrete_sequence=["#37d7b7", "#ffbc70", "#6ca7ff"]))
+        show_chart(px.bar(outcomes, x="Outcome", y="Windows", text="Windows", title="Held-out alert outcomes · frozen threshold", color="Outcome", color_discrete_sequence=["#0f766e", "#b45309", "#2563eb"]))
     with right:
         st.subheader("What the evidence says")
         st.write(f"{selected} was selected using {m['selection']['primary_metric']}. Test results did not choose the winner.")
@@ -82,7 +80,7 @@ if section == "Executive summary":
     st.caption(f"Provenance: {artifact_dir} • metrics.json and saved prediction CSVs only • existing HTML/Kibana reports remain unchanged")
 
 elif section == "Model comparison":
-    st.write("Seven saved candidates. Ordering stays fixed by grouped CV average precision even when a test metric is displayed.")
+    st.write(f"{len(m['models'])} saved candidates. Ordering stays fixed by mean CV average precision even when a test metric is displayed.")
     metric = st.selectbox("Comparison metric", ["mean_cv_average_precision", "mean_train_average_precision", "train_cv_ap_gap", "test_average_precision", "test_precision", "test_recall", "test_f1", "test_roc_auc"])
     fig = px.bar(table, x="model", y=metric, title=f"Candidate comparison · {metric}", hover_data=["mean_cv_average_precision", "std_cv_average_precision", "test_f1"])
     fig.update_xaxes(categoryorder="array", categoryarray=table.model.tolist(), tickangle=-25)
@@ -132,7 +130,7 @@ elif section == "Learning curve":
     fig.update_yaxes(range=[0, 1.05])
     show_chart(fig)
     last = curve.iloc[-1]
-    st.info(f"At the largest saved size, train AP minus validation AP is {last.mean_train_average_precision - last.mean_validation_average_precision:.4f}. Validation SD is {last.std_validation_average_precision:.4f}. This does not prove absence of overfitting; groups still come from one host/episode. Error bars show fold SD, not confidence intervals.")
+    st.info(f"At the largest saved size, train AP minus validation AP is {last.mean_train_average_precision - last.mean_validation_average_precision:.4f}. Validation SD is {last.std_validation_average_precision:.4f}. This does not prove absence of overfitting; interpret it within the recorded dataset, split and caveats. Error bars show fold SD, not confidence intervals.")
     st.caption("Learning-curve validation AP differs from the headline model-selection CV estimate because it is a separate saved training-size experiment. No models are fitted here.")
     st.dataframe(curve, hide_index=True, width="stretch")
 
@@ -147,20 +145,21 @@ elif section == "Dataset & governance":
     with left:
         labels = pd.DataFrame(dataset["positive_window_labels"].items(), columns=["Attack type", "Positive windows"])
         show_chart(px.bar(labels, x="Positive windows", y="Attack type", orientation="h", title="Attack composition · positive windows"))
-        st.caption("These are positive source-IP/minute windows, not independent attacks or flow counts. One source IP and a continuous episode dominate all labels.")
+        st.caption("These are positive source-IP/minute windows, not independent attacks or flow counts. Coverage limitations are recorded below.")
     with right:
-        split_table = pd.DataFrame({"Partition": ["Development", "Held-out test"], "Windows": [split["dev_windows"], split["test_windows"]], "Positives": [split["dev_positives"], split["test_positives"]], "5-minute groups": [split["dev_groups"], split["test_groups"]]})
+        split_table = pd.DataFrame({"Partition": ["Development", "Held-out test"], "Windows": [split["dev_windows"], split["test_windows"]], "Positives": [split["dev_positives"], split["test_positives"]], "Recorded groups": [split["dev_groups"], split["test_groups"]]})
         st.subheader("Split contract")
         st.dataframe(split_table, hide_index=True, width="stretch")
         st.write(split["method"])
         st.write(f"Recorded test/development group overlap: {split['group_overlap_test_development']}. Temporal policy: {split['temporal_policy']}.")
-        st.caption("Grouping reduces local bucket leakage; it does not create independent campaigns or a future-time test.")
+        st.caption(f"Recorded inner folds: {len(split['inner_folds'])}. Group meaning and capture boundaries follow the saved split contract, not an assumed time bucket.")
     st.subheader("Guardrails & limitations")
     for caveat in m["caveats"]:
         st.write(f"• {caveat}")
-    st.write(f"Positive UTC interval: {' → '.join(dataset['positive_window_time_range_utc'])}")
-    st.write("Model features: " + ", ".join(dataset["model_features"]))
-    st.write(m["selection"]["threshold_policy"])
+    st.subheader("Recorded dataset, split & provenance")
+    for line in governance_lines(m):
+        if not line.startswith("- "):
+            st.write(line)
     with st.expander("Recorded inner folds and runtime"):
         st.dataframe(pd.DataFrame(split["inner_folds"]), hide_index=True)
         st.json(m["runtime"])

@@ -13,7 +13,7 @@ def test_cloud_can_load_real_snapshot_without_local_artifacts(monkeypatch):
     at = AppTest.from_file(str(ROOT / 'streamlit_app.py'), default_timeout=30).run()
     assert not at.exception
     assert not at.error
-    assert at.metric[0].value == 'extra_trees'
+    assert at.metric[0].value == json.loads((snapshot / 'metrics.json').read_text())['selection']['model']
     for section in at.sidebar.radio[0].options:
         at.sidebar.radio[0].set_value(section).run()
         assert not at.exception
@@ -29,7 +29,9 @@ def test_cloud_snapshot_has_no_host_identity_or_model_bundles():
     for frame in (bundle.development, bundle.test):
         assert {'source_ip', 'window_id', 'reference_label'}.isdisjoint(frame.columns)
     assert not list(snapshot.glob('*.joblib'))
-    assert diagnostics(bundle,'extra_trees','Held-out test')['confusion'] == [[3215,2],[1,11]]
+    selected = bundle.metrics['selection']['model']
+    cm = bundle.metrics['models'][selected]['test_metrics']['confusion_matrix']
+    assert diagnostics(bundle, selected, 'Held-out test')['confusion'] == [[cm['tn'], cm['fp']], [cm['fn'], cm['tp']]]
 
 
 def test_default_directory_falls_back_to_bundled_snapshot(tmp_path):

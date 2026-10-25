@@ -84,3 +84,14 @@ def test_workspace_search_ranks_page_keywords_and_tolerates_typo():
     assert 'Evaluation' in pages
     pages,cols=m.search_workspace('flow',['flow_count','bytes_total'],m.PAGE_NAMES)
     assert cols==['flow_count']
+
+
+def test_workspace_reads_expanded_preview_scope_from_provenance(tmp_path):
+    import json
+    target=tmp_path/'report_data'
+    target.mkdir()
+    record={'workspace_label':'Expanded development-only feature preview','scope':'Full model uses all verified raw rows; this is only a bounded interactive preview.','rows':50000,'model_input_rows':4610049}
+    (target/'workspace_provenance.json').write_text(json.dumps(record),encoding='utf-8')
+    m=module()
+    assert hasattr(m,'default_workspace_provenance'), 'Default dataset scope is still hardcoded'
+    assert m.default_workspace_provenance(tmp_path)==record
