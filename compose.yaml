@@ -1,0 +1,411 @@
+# LOCAL DEVELOPMENT ONLY: authentication is disabled; never expose these ports.
+name: cyber-threat-lab
+
+x-kafka-common: &kafka-common
+  CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+  KAFKA_PROCESS_ROLES: broker,controller
+  KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,HOST://:29092
+  KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,HOST:PLAINTEXT
+  KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+  KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+  KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka-1:9093,2@kafka-2:9093,3@kafka-3:9093
+  KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+  KAFKA_DEFAULT_REPLICATION_FACTOR: "3"
+  KAFKA_MIN_INSYNC_REPLICAS: "2"
+  KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+  KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "2"
+  KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+  KAFKA_HEAP_OPTS: -Xms256M -Xmx256M
+  KAFKA_LOG_CLEANER_DEDUPE_BUFFER_SIZE: "16777216"
+  KAFKA_LOG_CLEANER_THREADS: "1"
+  KAFKA_LOG_DIRS: /var/lib/kafka/data
+
+x-mongo-common: &mongo-common
+  image: mongo:9.0.4
+  profiles: [bigdata]
+  command: [mongod, --replSet, rs0, --bind_ip_all]
+  mem_limit: 512m
+  healthcheck:
+    test: [CMD-SHELL, "mongosh --quiet --eval 'db.adminCommand({ping:1}).ok' | grep -q 1"]
+    interval: 10s
+    timeout: 5s
+    retries: 30
+    start_period: 30s
+
+x-cassandra-common: &cassandra-common
+  image: cassandra:5.0.9
+  profiles: [bigdata]
+  environment: &cassandra-environment
+    CASSANDRA_CLUSTER_NAME: cyberlab
+    CASSANDRA_SEEDS: cassandra-1
+    CASSANDRA_DC: datacenter1
+    CASSANDRA_RACK: rack1
+    CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+    CASSANDRA_NUM_TOKENS: "16"
+    CASSANDRA_RPC_ADDRESS: 0.0.0.0
+    MAX_HEAP_SIZE: 256M
+    MAX_DIRECT_MEMORY_SIZE: 128M
+  mem_limit: 1g
+  healthcheck:
+    test: [CMD-SHELL, "nodetool status | grep -q 'UN'"]
+    interval: 15s
+    timeout: 10s
+    retries: 30
+    start_period: 90s
+
+x-spark-common: &spark-common
+  image: cyberlab-spark:4.2.0
+  build:
+    context: .
+    dockerfile: Dockerfile.spark
+  profiles: [bigdata]
+
+x-spark-sink-env: &spark-sink-env
+  MONGO_URI: "mongodb://mongo-1:27017,mongo-2:27017,mongo-3:27017/cyberlab?replicaSet=rs0&retryWrites=true&w=majority"
+  CASSANDRA_HOSTS: cassandra-1,cassandra-2,cassandra-3
+  ELASTICSEARCH_URL: http://elasticsearch:9200
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.17.0
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      xpack.security.enrollment.enabled: "false"
+      xpack.security.http.ssl.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    mem_limit: 1536m
+    ports:
+      - "127.0.0.1:19200:9200"
+    volumes:
+      - elastic-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' > /dev/null"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.17.0
+    environment:
+      ELASTICSEARCH_HOSTS: '["http://elasticsearch:9200"]'
+      SERVER_HOST: 0.0.0.0
+      TELEMETRY_ENABLED: "false"
+      NODE_OPTIONS: --max-old-space-size=768
+    mem_limit: 1g
+    ports:
+      - "127.0.0.1:15601:5601"
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:5601/api/status' > /dev/null"]
+      interval: 15s
+      timeout: 10s
+      retries: 40
+      start_period: 90s
+
+  model-report:
+    image: caddy:2.10-alpine
+    profiles: [report]
+    ports:
+      - "127.0.0.1:18090:80"
+    volumes:
+      - ./artifacts/model_benchmark:/usr/share/caddy:ro
+      - ./deploy/report/Caddyfile:/etc/caddy/Caddyfile:ro
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "wget -qO- http://localhost/ > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  pipeline:
+    profiles: [tools]
+    build: .
+    command: [python, -m, cyberlab, run, --input, /app/data/raw, --output, /app/artifacts, --publish]
+    environment:
+      PYTHONPATH: /app
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      KIBANA_URL: http://kibana:5601
+    volumes:
+      - ./data:/app/data
+      - ./artifacts:/app/artifacts
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+
+  kafka-1:
+    image: apache/kafka:4.2.2
+    profiles: [bigdata]
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: "1"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-1:9092,HOST://127.0.0.1:19092
+    ports: ["127.0.0.1:19092:29092"]
+    volumes: [kafka-1-data:/var/lib/kafka/data]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 45s
+
+  kafka-2:
+    image: apache/kafka:4.2.2
+    profiles: [bigdata]
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: "2"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-2:9092,HOST://127.0.0.1:19093
+    ports: ["127.0.0.1:19093:29092"]
+    volumes: [kafka-2-data:/var/lib/kafka/data]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 45s
+
+  kafka-3:
+    image: apache/kafka:4.2.2
+    profiles: [bigdata]
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: "3"
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka-3:9092,HOST://127.0.0.1:19094
+    ports: ["127.0.0.1:19094:29092"]
+    volumes: [kafka-3-data:/var/lib/kafka/data]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 8s
+      retries: 30
+      start_period: 45s
+
+  kafka-topics:
+    image: apache/kafka:4.2.2
+    profiles: [bigdata]
+    entrypoint: [bash, -ec]
+    command:
+      - |
+        for topic in cyber-flows cyber-predictions; do
+          /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka-1:9092,kafka-2:9092,kafka-3:9092 --create --if-not-exists --topic "$$topic" --partitions 6 --replication-factor 3 --config min.insync.replicas=2;
+        done
+    depends_on:
+      kafka-1: {condition: service_healthy}
+      kafka-2: {condition: service_healthy}
+      kafka-3: {condition: service_healthy}
+    restart: "no"
+    mem_limit: 256m
+
+  mongo-1:
+    <<: *mongo-common
+    volumes: [mongo-1-data:/data/db]
+
+  mongo-2:
+    <<: *mongo-common
+    volumes: [mongo-2-data:/data/db]
+    depends_on: [mongo-1]
+
+  mongo-3:
+    <<: *mongo-common
+    volumes: [mongo-3-data:/data/db]
+    depends_on: [mongo-1]
+
+  mongo-init:
+    image: mongo:9.0.4
+    profiles: [bigdata]
+    command: [bash, /scripts/init_mongo.sh]
+    volumes: [./scripts/init_mongo.sh:/scripts/init_mongo.sh:ro]
+    depends_on:
+      mongo-1: {condition: service_healthy}
+      mongo-2: {condition: service_healthy}
+      mongo-3: {condition: service_healthy}
+    restart: "no"
+    mem_limit: 256m
+
+  cassandra-1:
+    <<: *cassandra-common
+    ports: ["127.0.0.1:19042:9042"]
+    volumes: [cassandra-1-data:/var/lib/cassandra]
+
+  cassandra-2:
+    <<: *cassandra-common
+    volumes: [cassandra-2-data:/var/lib/cassandra]
+    depends_on:
+      cassandra-1: {condition: service_healthy}
+
+  cassandra-3:
+    <<: *cassandra-common
+    volumes: [cassandra-3-data:/var/lib/cassandra]
+    depends_on:
+      cassandra-2: {condition: service_healthy}
+
+  cassandra-init:
+    <<: *spark-common
+    profiles: [bigdata]
+    entrypoint: [python3]
+    command: [/opt/spark/jobs/init_cassandra.py]
+    depends_on:
+      cassandra-1: {condition: service_healthy}
+      cassandra-2: {condition: service_healthy}
+      cassandra-3: {condition: service_healthy}
+    restart: "no"
+    mem_limit: 512m
+    environment:
+      CASSANDRA_HOSTS: cassandra-1,cassandra-2,cassandra-3
+
+  spark-master:
+    <<: *spark-common
+    entrypoint: [/opt/spark/bin/spark-class]
+    command: [org.apache.spark.deploy.master.Master, --host, spark-master, --port, "7077", --webui-port, "8080"]
+    ports: ["127.0.0.1:18180:8080"]
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD-SHELL, "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8080').read(1)\""]
+      interval: 10s
+      timeout: 8s
+      retries: 20
+      start_period: 30s
+
+  spark-worker-1:
+    <<: *spark-common
+    entrypoint: [/opt/spark/bin/spark-class]
+    command: [org.apache.spark.deploy.worker.Worker, --host, spark-worker-1, --webui-port, "8081", spark://spark-master:7077]
+    environment:
+      <<: *spark-sink-env
+      SPARK_WORKER_CORES: "1"
+      SPARK_WORKER_MEMORY: 512m
+    ports: ["127.0.0.1:18081:8081"]
+    volumes: [./artifacts:/app/artifacts, ./artifacts/spark-checkpoints:/app/checkpoints]
+    mem_limit: 768m
+    depends_on:
+      spark-master: {condition: service_healthy}
+    healthcheck:
+      test: [CMD-SHELL, "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8081').read(1)\""]
+      interval: 10s
+      timeout: 8s
+      retries: 20
+      start_period: 30s
+
+  spark-worker-2:
+    <<: *spark-common
+    entrypoint: [/opt/spark/bin/spark-class]
+    command: [org.apache.spark.deploy.worker.Worker, --host, spark-worker-2, --webui-port, "8081", spark://spark-master:7077]
+    environment:
+      <<: *spark-sink-env
+      SPARK_WORKER_CORES: "1"
+      SPARK_WORKER_MEMORY: 512m
+    ports: ["127.0.0.1:18082:8081"]
+    volumes: [./artifacts:/app/artifacts, ./artifacts/spark-checkpoints:/app/checkpoints]
+    mem_limit: 768m
+    depends_on:
+      spark-master: {condition: service_healthy}
+    healthcheck:
+      test: [CMD-SHELL, "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8081').read(1)\""]
+      interval: 10s
+      timeout: 8s
+      retries: 20
+      start_period: 30s
+
+  spark-stream:
+    <<: *spark-common
+    entrypoint: [/opt/spark/bin/spark-submit]
+    command:
+      - --master
+      - spark://spark-master:7077
+      - --conf
+      - spark.jars.ivy=/tmp/ivy
+      - --packages
+      - org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0
+      - --conf
+      - spark.driver.host=spark-stream
+      - --conf
+      - spark.driver.bindAddress=0.0.0.0
+      - --conf
+      - spark.driver.port=7078
+      - --conf
+      - spark.blockManager.port=7079
+      - --conf
+      - spark.executor.memory=512m
+      - --conf
+      - spark.cores.max=2
+      - --conf
+      - spark.sql.session.timeZone=UTC
+      - /opt/spark/jobs/spark_jobs/streaming.py
+      - --checkpoints
+      - /app/checkpoints/stream
+    environment:
+      <<: *spark-sink-env
+      KAFKA_BOOTSTRAP_SERVERS: kafka-1:9092,kafka-2:9092,kafka-3:9092
+      KAFKA_FLOW_TOPIC: cyber-flows
+      KAFKA_PREDICTION_TOPIC: cyber-predictions
+      CHECKPOINT_DIR: /app/checkpoints
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./artifacts/spark-checkpoints:/app/checkpoints
+      - spark-ivy:/tmp/ivy
+    depends_on:
+      kafka-topics: {condition: service_completed_successfully}
+      mongo-init: {condition: service_completed_successfully}
+      cassandra-init: {condition: service_completed_successfully}
+      spark-master: {condition: service_healthy}
+      spark-worker-1: {condition: service_healthy}
+      spark-worker-2: {condition: service_healthy}
+      elasticsearch: {condition: service_healthy}
+    restart: unless-stopped
+    mem_limit: 1536m
+
+  spark-batch:
+    <<: *spark-common
+    profiles: [bigdata]
+    entrypoint: [/opt/spark/bin/spark-submit]
+    command:
+      - --master
+      - spark://spark-master:7077
+      - --conf
+      - spark.driver.host=spark-batch
+      - --conf
+      - spark.driver.bindAddress=0.0.0.0
+      - --conf
+      - spark.driver.port=7080
+      - --conf
+      - spark.blockManager.port=7081
+      - --conf
+      - spark.executor.memory=512m
+      - --conf
+      - spark.cores.max=2
+      - --conf
+      - spark.sql.session.timeZone=UTC
+      - /opt/spark/jobs/spark_jobs/batch.py
+    environment:
+      <<: *spark-sink-env
+      ARTIFACT_DIR: /app/artifacts
+    volumes: [./artifacts:/app/artifacts]
+    depends_on:
+      mongo-init: {condition: service_completed_successfully}
+      cassandra-init: {condition: service_completed_successfully}
+      spark-master: {condition: service_healthy}
+      spark-worker-1: {condition: service_healthy}
+      spark-worker-2: {condition: service_healthy}
+      elasticsearch: {condition: service_healthy}
+    restart: "no"
+    mem_limit: 1536m
+
+volumes:
+  elastic-data:
+  kafka-1-data:
+  kafka-2-data:
+  kafka-3-data:
+  mongo-1-data:
+  mongo-2-data:
+  mongo-3-data:
+  spark-ivy:
+  cassandra-1-data:
+  cassandra-2-data:
+  cassandra-3-data:

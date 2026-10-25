@@ -1,0 +1,17 @@
+# Inputs and generated results can contain sensitive network identities.
+data/
+artifacts/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+launcher/bin/
+launcher/obj/
+probe.csv
+.env
+.env.*
+!.env.example
+*.log

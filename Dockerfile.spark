@@ -1,0 +1,11 @@
+FROM apache/spark:4.2.0
+
+USER root
+COPY requirements-spark.txt /tmp/requirements-spark.txt
+RUN python3 -m pip install --no-cache-dir -r /tmp/requirements-spark.txt
+RUN mkdir -p /tmp/ivy && chown 185:0 /tmp/ivy
+COPY spark_jobs/ /opt/spark/jobs/spark_jobs/
+COPY scripts/init_cassandra.py /opt/spark/jobs/init_cassandra.py
+ENV PYTHONPATH=/opt/spark/jobs
+WORKDIR /opt/spark/jobs
+USER 185

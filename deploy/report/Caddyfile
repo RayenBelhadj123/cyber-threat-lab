@@ -1,0 +1,7 @@
+:80 {
+    root * /usr/share/caddy
+    @root path /
+    rewrite @root /report.html
+    header Cache-Control "no-cache"
+    file_server
+}
