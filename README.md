@@ -77,6 +77,30 @@ Open **http://localhost:15601/app/dashboards#/view/cyber-overview**.
 
 Elasticsearch is at **http://localhost:19200**. The historical data is from July 6, 2017, not today: use the saved dashboard's historical time range or set an absolute range covering July 6–7, 2017 UTC. A default 'last 15 minutes' filter will show no data.
 
+## Full-week CICIDS2017 training data (optional)
+
+Download the original labeled-flow CSV distribution from a pinned, unofficial Hugging Face mirror:
+
+```bash
+.venv/Scripts/python.exe scripts/download_cicids2017_full.py
+```
+
+This verifies the archive against the pinned mirror SHA256, validates all eight identity/time/label CSV schemas, counts every row and label, and writes `data/cicids2017_full_manifest.json`. Files are saved separately under `data/cicids2017_full/`; the existing Thursday input, reports and model artifacts are not overwritten. The archive is 283,876,488 bytes and the eight CSVs total 1,203,105,382 bytes, containing 2,830,743 raw flow rows (2,273,097 benign and 557,646 attack-labeled). Counts precede normalization/deduplication.
+
+The mirror is `bencorn/CICIDS2017`, revision `811c007f08d693a8a8b4226c197c138391806ce6`, file `csvs/GeneratedLabelledFlows.zip`. Its checksum is a mirror-integrity check, not independent confirmation from the original publisher. Attribute CIC/UNB and consult their CICIDS2017 dataset terms and paper. Do not substitute MachineLearningCSV: that version lacks the identity/time fields required by the host-window pipeline.
+
+**Do not combine this directory with `data/raw`**: the original Thursday web-attack rows overlap. Use `data/cicids2017_full` alone for a future full-week experiment. Downloading does not retrain models or refresh the Thursday-only reporting snapshot; evaluation design and report caveats must be updated before a full-week benchmark is presented. The downloader refuses to overwrite an existing dataset directory.
+
+## Additional attack captures (optional)
+
+```bash
+.venv/Scripts/python.exe scripts/download_attack_extension.py
+```
+
+This acquires three complete, checksum-pinned CIC-DDoS2019 mirror CSVs (NTP amplification, UDP-lag and Portmap captures) into `data/cicddos2019_extension/`. Every raw row is retained, including benign examples. A manifest records observed labels/counts and provenance. Downloads resume in a `.staging` directory after network interruptions; a final directory appears only after all files pass size, SHA256 and schema checks. Existing complete datasets are never overwritten.
+
+Keep this extension separate from CICIDS2017. It is attack-heavy and must not determine a production-like evaluation class balance. Hold out an independent capture/domain before tuning, deduplicate/group flows, and explicitly align feature definitions. The mirror also contains 2018-looking timestamp strings despite its CIC-DDoS2019 label; raw values are preserved and the ambiguity must be resolved before temporal integration. No current model is retrained and no improvement is claimed merely because additional attack rows were downloaded. The downloader uses a pinned, unofficial Hugging Face mirror attributed to CIC/UNB and does not publish raw data to GitHub.
+
 ## Windows one-click Kibana launcher
 
 Build the shield-icon launcher from the repository root:
@@ -137,14 +161,30 @@ Open `artifacts/model_benchmark/report.html` for the SVG charts, metric table, a
 
 ### Streamlit reporting workspace
 
-An additional reporting workspace adapts the DataIQ housing project's workflow: executive summary, interactive Plotly comparisons and diagnostics, learning-size analysis, dataset/split evidence, and report downloads. It reads the saved benchmark artifacts without retraining or replacing Kibana.
+An additional reporting workspace adapts the DataIQ housing project's workflow. The original six views are read-only benchmark evidence. Turn on **Full analytics workspace** in the sidebar for the expanded CSV-to-model workflow, without replacing Kibana or the published benchmark.
+
+The full workspace has project templates and four app modes, CSV upload, smart role/feature setup, audited cleaning, exploration, supervised and unsupervised labs, prediction and model bundles, explainability and scenarios, forecasting, OLAP, governance, experiment tracking and report exports. Search pages/columns or filter workflow areas; **Show advanced pages** controls the complete navigation. The bundled training/exploration table is `report_data/workspace_features.csv`, derived from actual saved feature windows, with provenance in `workspace_provenance.json`. Uploads are bounded to 25 MB, 50,000 rows and 200 columns; larger capture processing stays in the offline pipeline. Interactive experiments live in the current browser session and never silently retrain or promote the fixed benchmark. See `docs/analytics-feature-parity.md` for the reference mapping and safety differences.
 
 ```bash
-uv pip install --python .venv/Scripts/python.exe -r requirements-report.txt
+uv pip install --python .venv/Scripts/python.exe -r requirements.txt
 .venv/Scripts/python.exe -m streamlit run streamlit_app.py --server.address 127.0.0.1 --server.port 8502
 ```
 
 Open `http://127.0.0.1:8502`. Local serving uses explicit loopback-only flags; shared Streamlit config does not force a host-specific bind or port, so cloud hosting can manage them. A clean clone uses the real, identifier-free snapshot in `report_data/`. If local benchmark artifacts exist, they take precedence; `CYBERLAB_BENCHMARK_DIR` can select another trusted directory. On Linux/macOS substitute `.venv/bin/python`. See `docs/reporting-reference.md` for the adapted patterns and deliberate differences. No reference-project files or data are modified.
+
+### Run data and Live data detection
+
+Use **Data mode** at the top of the sidebar:
+
+- **Reports** preserves the six benchmark views and optional full workspace.
+- **Run data** scores an uploaded feature-window CSV or CICIDS flow CSV with the published Extra Trees model at its frozen threshold. Feature uploads require the eight exact model columns; `source_ip` and `timestamp` are optional observed metadata, never invented. Flow uploads use the existing ingestion/aggregation rules, allow absent labels and report rejected/duplicate rows. Download the template or scored results. Inputs are bounded to 25 MB / 50,000 rows / 200 columns.
+- **Live data** scores the latest bounded windows already present in `cyber-features-spark-stream-v1`. Explicitly fetch once or start 5–60 second refresh; paused views make no source query. The default last-15-minute event filter prevents 2017 data from appearing as current attacks. **Include historical / replayed events** is clearly labeled, opt-in replay inspection, not evidence of attacks now.
+
+The server-side `CYBERLAB_LIVE_ELASTICSEARCH_URL` defaults to `http://127.0.0.1:19200`; visitors cannot supply arbitrary URLs. Start the existing Kafka/Spark pipeline separately to supply recent windows. This view is **not packet capture**, does not automatically start distributed services, and does not block hosts. Polling interval is not end-to-end latency: completed host/minute aggregation and pipeline delay also apply. A hosted Streamlit server cannot reach your PC through its own localhost.
+
+Results identify **suspicious source IPs for analyst review**, not confirmed attackers. Identifier-reduced uploads can be scored but cannot identify hosts. The current detector remains Thursday-only and has not been retrained on the downloaded extensions. The packaged `.skops` model is hash/version checked; arbitrary model uploads are not accepted in detection mode.
+
+See `docs/project-structure.md` for module ownership and reproducible checks, and `docs/project-audit.md` for verified coverage and remaining operating limits.
 
 ### Streamlit Community Cloud
 
@@ -155,7 +195,7 @@ Create an app with these settings:
 - Main file path: `streamlit_app.py`
 - Python: `3.12`
 
-Root `requirements.txt` includes the reporting dependencies. The app loads `report_data/` on a clean clone, so it does not need local Docker services, raw training data, PyTorch, or serialized models. This is a read-only benchmark report, not a cloud deployment of Elasticsearch/Kibana. Local training artifacts and network identities remain excluded from Git. The committed snapshot is derived from the actual benchmark; it is not synthetic.
+Root `requirements.txt` includes the reporting dependencies. The app loads `report_data/` on a clean clone, so it does not need local Docker services, raw training data or PyTorch. Its default benchmark views are read-only; the optional full workspace runs bounded, explicit-button experiments in session memory and supports validated model bundles, not arbitrary pickle uploads. This is not a cloud deployment of Elasticsearch/Kibana. Local training artifacts and network identities remain excluded from Git. The committed snapshot is derived from the actual benchmark; it is not synthetic.
 
 ### Native Kibana report
 

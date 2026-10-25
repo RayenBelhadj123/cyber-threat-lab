@@ -1,7 +1,8 @@
 """Local, read-only Cyber Threat Lab benchmark explorer.
 
 Run locally: .venv/Scripts/python.exe -m streamlit run streamlit_app.py --server.address 127.0.0.1 --server.port 8502
-Only JSON and CSV artifacts are read; saved estimators are never loaded.
+Reporting mode reads only JSON/CSV evidence. Explicit Run/Live modes load the
+packaged hash-checked inference detector; workspace experiments remain separate.
 """
 import os
 from pathlib import Path
@@ -25,6 +26,15 @@ h1,h2,h3 {letter-spacing:-.025em} [data-testid="stCaptionContainer"] {color:#a5b
 SECTIONS = ("Executive summary", "Model comparison", "Model diagnostics", "Learning curve", "Dataset & governance", "Report generator")
 st.sidebar.markdown("## 🛡️ CYBER THREAT LAB")
 st.sidebar.caption("BENCHMARK / EVIDENCE WORKSPACE")
+data_mode = st.sidebar.segmented_control("Data mode", ["Reports", "Run data", "Live data"], default="Reports", key="cyber_detection_mode")
+if data_mode in ("Run data", "Live data"):
+    from cyberlab.live_detection import render_detection
+    render_detection(Path(__file__).resolve().parent, data_mode)
+    st.stop()
+if st.sidebar.toggle("Full analytics workspace", value=False, key="full_analytics_workspace"):
+    from cyberlab.workspace import render_workspace
+    render_workspace(Path(__file__).resolve().parent)
+    st.stop()
 section = st.sidebar.radio("Workflow", SECTIONS)
 st.sidebar.divider()
 st.sidebar.caption("Read-only reporting • no retraining\n\nLocal experiment, not production validation")
@@ -34,7 +44,7 @@ try:
 except ArtifactError as exc:
     st.title("Benchmark artifacts unavailable")
     st.error(str(exc))
-    st.info("Provide metrics.json, development_oof_predictions.csv and held_out_test_predictions.csv in artifacts/model_benchmark, or set CYBERLAB_BENCHMARK_DIR. No synthetic fallback is used.")
+    st.info("Provide metrics.json, development_oof_predictions.csv and held_out_test_predictions.csv in artifacts/model_benchmark or report_data, or set CYBERLAB_BENCHMARK_DIR. No synthetic fallback is used.")
     st.stop()
 
 m = bundle.metrics

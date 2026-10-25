@@ -155,7 +155,7 @@ def test_compose_and_python_image_are_isolated_local_development():
     assert "WORKDIR /app" in dockerfile
     dl_requirements = (ROOT / "requirements-dl.txt").read_text().splitlines()
     assert dl_requirements == ["torch==2.13.0"]
-    required = {"pandas", "numpy", "scikit-learn", "requests", "pytest", "joblib", "tzdata", "kafka-python", "streamlit", "plotly"}
+    required = {"pandas", "numpy", "scikit-learn", "requests", "pytest", "joblib", "tzdata", "kafka-python", "streamlit", "plotly", "skops"}
     requirements = (ROOT / "requirements.txt").read_text().splitlines()
     package_names = {r.split(">=", 1)[0] if ">=" in r else r.split("==", 1)[0]
                      for r in requirements if r and not r.startswith("#")}

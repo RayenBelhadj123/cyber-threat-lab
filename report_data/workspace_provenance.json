@@ -1,0 +1,22 @@
+{
+  "source": "Actual saved cyberlab CICIDS2017 Thursday source-host/minute features",
+  "source_sha256": "ccee21c2a7038d5635cf2646b6c66dee0a6618f24cfb1f3d9423fda7fc75a332",
+  "snapshot_sha256": "50072e5a404fbbc43f09d12957b6090e0419c5c23e8c8fa418e8a23b462dbaa4",
+  "rows": 16174,
+  "positive_windows": 68,
+  "columns": [
+    "timestamp",
+    "time_group",
+    "malicious",
+    "flow_count",
+    "unique_destinations",
+    "unique_ports",
+    "bytes_total",
+    "packets_total",
+    "duration_mean",
+    "rate_mean",
+    "failure_ratio"
+  ],
+  "privacy": "Source IP, window IDs, earlier split metadata and reference-label strings omitted. No data synthesized.",
+  "scope": "Thursday-only feature snapshot; not downloaded full-week or CIC-DDoS2019 data. No automatic retraining or report promotion."
+}

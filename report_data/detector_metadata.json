@@ -1,0 +1,20 @@
+{
+  "model_name": "extra_trees",
+  "features": [
+    "flow_count",
+    "unique_destinations",
+    "unique_ports",
+    "bytes_total",
+    "packets_total",
+    "duration_mean",
+    "rate_mean",
+    "failure_ratio"
+  ],
+  "threshold": 0.6365746297698786,
+  "artifact_sha256": "79b342752006c0a6526955870b19853fa22fd19fe41d4ecb0a48d299209a9473",
+  "format": "skops",
+  "sklearn_version": "1.9.1",
+  "scope": "Original Thursday-only CV-selected benchmark; not retrained on downloaded extensions. Suspicious source predictions are not confirmed attacker attribution.",
+  "threshold_policy": "Frozen development OOF maximum-F1 operating threshold; no live/test tuning.",
+  "source_bundle_sha256": "a3c676b24780c6f74b5e71c98e814c7187591d21d0ed5a77ba5c508ce6b6f072"
+}
