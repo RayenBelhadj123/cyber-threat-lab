@@ -21,6 +21,7 @@ import pandas as pd
 from .pipeline import ALIASES, NUMERIC, canonical_header, digest, valid_ip
 
 SCHEMA_VERSION = 1
+FLOW_STATS_SUMMARY_VERSION = 2
 DATASETS = {"CICIDS2017", "CICDDoS2019"}
 SORT_COLUMNS = {
     "timestamp": "timestamp",
@@ -137,6 +138,106 @@ def _add_indexes(connection: sqlite3.Connection) -> None:
     connection.execute("CREATE INDEX idx_topology_count ON flow_topology(dataset, flow_count DESC)")
 
 
+def _build_flow_stats_summary(connection: sqlite3.Connection) -> None:
+    """Materialize bounded dashboard aggregates so API reads avoid rescanning flows."""
+    connection.execute("CREATE TABLE IF NOT EXISTS flow_stats_summary (dataset TEXT PRIMARY KEY, summary_json TEXT NOT NULL) WITHOUT ROWID")
+    summaries = {name: {"protocols": Counter(), "labels": Counter(), "sources": Counter(), "ports": Counter(), "hourly": Counter()}
+                 for name in (*sorted(DATASETS), "expanded")}
+    scalars = {row[0]: row[1:] for row in connection.execute(
+        "SELECT dataset,COUNT(*),SUM(malicious),SUM(packets_total),SUM(duration),MIN(timestamp),MAX(timestamp) FROM flows GROUP BY dataset")}
+    for dataset, protocol, count in connection.execute(
+        "SELECT dataset,protocol,COUNT(*) FROM flows GROUP BY dataset,protocol"):
+        summaries[dataset]["protocols"][PROTOCOL_NAMES.get(protocol, f"IP protocol {protocol}")] += count
+    for dataset, label, count in connection.execute("SELECT dataset,label,COUNT(*) FROM flows GROUP BY dataset,label"):
+        summaries[dataset]["labels"][label] += count
+    for dataset, ip, count in connection.execute("""
+        SELECT dataset,source_ip,n FROM (
+            SELECT dataset,source_ip,COUNT(*) AS n,
+                   ROW_NUMBER() OVER (PARTITION BY dataset ORDER BY COUNT(*) DESC,source_ip) AS position
+            FROM flows GROUP BY dataset,source_ip
+        ) WHERE position <= 12"""):
+        summaries[dataset]["sources"][ip] += count
+    for dataset, port, count in connection.execute("""
+        SELECT dataset,destination_port,n FROM (
+            SELECT dataset,destination_port,COUNT(*) AS n,
+                   ROW_NUMBER() OVER (PARTITION BY dataset ORDER BY COUNT(*) DESC,destination_port) AS position
+            FROM flows GROUP BY dataset,destination_port
+        ) WHERE position <= 12"""):
+        summaries[dataset]["ports"][int(port)] += count
+    for dataset, hour, count in connection.execute(
+        "SELECT dataset,substr(timestamp,1,13),COUNT(*) FROM flows GROUP BY dataset,substr(timestamp,1,13)"):
+        summaries[dataset]["hourly"][hour] += count
+
+    dataset_payloads = {}
+    for dataset in sorted(DATASETS):
+        count, suspicious, packet_sum, duration_sum, first, last = scalars.get(dataset, (0, 0, 0, 0, None, None))
+        grouped = summaries[dataset]
+        dataset_payloads[dataset] = {
+            "data_mode": "Historical benchmark", "dataset": dataset,
+            "total_flows": int(count or 0), "suspicious_flows": int(suspicious or 0),
+            "protocols": dict(grouped["protocols"]), "labels": dict(grouped["labels"]),
+            "top_sources": [{"source_ip": ip, "flows": n} for ip, n in sorted(grouped["sources"].items(), key=lambda item: (-item[1], item[0]))[:12]],
+            "top_destination_ports": [{"port": port, "flows": n} for port, n in sorted(grouped["ports"].items(), key=lambda item: (-item[1], item[0]))[:12]],
+            "hourly": [{"hour": hour, "flows": n} for hour, n in sorted(grouped["hourly"].items())],
+            "mean_packets": (packet_sum / count) if count else None,
+            "mean_duration_microseconds": (duration_sum / count) if count else None,
+            "time_range_utc": [first, last] if first else None,
+        }
+
+    expanded = summaries["expanded"]
+    total = suspicious = packet_sum = duration_sum = 0
+    first_values, last_values = [], []
+    for dataset in sorted(DATASETS):
+        count, positive, packets, duration, first, last = scalars.get(dataset, (0, 0, 0, 0, None, None))
+        total += int(count or 0)
+        suspicious += int(positive or 0)
+        packet_sum += float(packets or 0)
+        duration_sum += float(duration or 0)
+        if first: first_values.append(first)
+        if last: last_values.append(last)
+        grouped = summaries[dataset]
+        for name in ("protocols", "labels", "sources", "ports", "hourly"):
+            expanded[name].update(grouped[name])
+    # Top-N rankings are not additive: a value outside each dataset's top 12
+    # can become the global leader after the datasets are combined.
+    expanded["sources"] = Counter(dict(connection.execute(
+        "SELECT source_ip,COUNT(*) FROM flows GROUP BY source_ip ORDER BY COUNT(*) DESC,source_ip LIMIT 12")))
+    expanded["ports"] = Counter(dict(connection.execute(
+        "SELECT destination_port,COUNT(*) FROM flows GROUP BY destination_port ORDER BY COUNT(*) DESC,destination_port LIMIT 12")))
+    expanded_payload = {
+        "data_mode": "Historical benchmark", "dataset": "expanded", "total_flows": total,
+        "suspicious_flows": suspicious, "protocols": dict(expanded["protocols"]),
+        "labels": dict(expanded["labels"]),
+        "top_sources": [{"source_ip": ip, "flows": n} for ip, n in sorted(expanded["sources"].items(), key=lambda item: (-item[1], item[0]))[:12]],
+        "top_destination_ports": [{"port": port, "flows": n} for port, n in sorted(expanded["ports"].items(), key=lambda item: (-item[1], item[0]))[:12]],
+        "hourly": [{"hour": hour, "flows": n} for hour, n in sorted(expanded["hourly"].items())],
+        "mean_packets": packet_sum / total if total else None,
+        "mean_duration_microseconds": duration_sum / total if total else None,
+        "time_range_utc": [min(first_values), max(last_values)] if first_values else None,
+    }
+    summaries = {**dataset_payloads, "expanded": expanded_payload}
+    for summary in summaries.values():
+        summary["_summary_version"] = FLOW_STATS_SUMMARY_VERSION
+    connection.execute("DELETE FROM flow_stats_summary")
+    connection.executemany("INSERT INTO flow_stats_summary(dataset,summary_json) VALUES (?,?)",
+                           [(name, json.dumps(summary, separators=(",", ":"))) for name, summary in summaries.items()])
+
+
+def _ensure_flow_stats_summary(connection: sqlite3.Connection, dataset: str) -> str:
+    connection.execute("CREATE TABLE IF NOT EXISTS flow_stats_summary (dataset TEXT PRIMARY KEY, summary_json TEXT NOT NULL) WITHOUT ROWID")
+    row = connection.execute("SELECT summary_json FROM flow_stats_summary WHERE dataset=?", (dataset,)).fetchone()
+    try:
+        cached = json.loads(row[0]) if row is not None else None
+    except (TypeError, json.JSONDecodeError):
+        cached = None
+    if not isinstance(cached, dict) or cached.get("_summary_version") != FLOW_STATS_SUMMARY_VERSION:
+        _build_flow_stats_summary(connection)
+        row = connection.execute("SELECT summary_json FROM flow_stats_summary WHERE dataset=?", (dataset,)).fetchone()
+    if row is None:
+        raise RuntimeError(f"Cached flow statistics are unavailable for dataset {dataset}")
+    return str(row[0])
+
+
 def build_flow_store(entries: list[dict[str, Any]], output: str | Path, *, chunk_size: int = 50_000) -> dict[str, Any]:
     """Build a verified SQLite fact store in bounded memory from manifest entries."""
     if chunk_size < 1:
@@ -211,6 +312,7 @@ def build_flow_store(entries: list[dict[str, Any]], output: str | Path, *, chunk
             file_stats[-1]["duplicate_rows"] = max(0, sum(file_labels.values()) - file_valid)
 
         _add_indexes(connection)
+        _build_flow_stats_summary(connection)
         connection.commit()
         counts = {row[0]: row[1] for row in connection.execute("SELECT dataset, COUNT(*) FROM flows GROUP BY dataset")}
         stored_labels: dict[str, Counter] = {}
@@ -323,21 +425,14 @@ def query_flows(database: str | Path, *, dataset: str = "expanded", filters: dic
 
 
 def flow_stats(database: str | Path, *, dataset: str = "expanded") -> dict[str, Any]:
-    where, values = _where(dataset, {})
+    _dataset_clause(dataset)
     connection = sqlite3.connect(database)
     try:
-        row = connection.execute(f"SELECT COUNT(*), SUM(malicious), AVG(packets_total), AVG(duration), MIN(timestamp), MAX(timestamp) FROM flows WHERE {where}", values).fetchone()
-        protocols = {PROTOCOL_NAMES.get(int(number), f"IP protocol {number}"): count
-                     for number, count in connection.execute(f"SELECT protocol,COUNT(*) FROM flows WHERE {where} GROUP BY protocol ORDER BY COUNT(*) DESC", values)}
-        labels = {str(name): count for name, count in connection.execute(f"SELECT label,COUNT(*) FROM flows WHERE {where} GROUP BY label ORDER BY COUNT(*) DESC", values)}
-        sources = [{"source_ip": ip, "flows": count} for ip, count in connection.execute(f"SELECT source_ip,COUNT(*) FROM flows WHERE {where} GROUP BY source_ip ORDER BY COUNT(*) DESC,source_ip LIMIT 12", values)]
-        ports = [{"port": port, "flows": count} for port, count in connection.execute(f"SELECT destination_port,COUNT(*) FROM flows WHERE {where} GROUP BY destination_port ORDER BY COUNT(*) DESC,destination_port LIMIT 12", values)]
-        hourly = [{"hour": hour, "flows": count} for hour, count in connection.execute(f"SELECT substr(timestamp,1,13),COUNT(*) FROM flows WHERE {where} GROUP BY substr(timestamp,1,13) ORDER BY substr(timestamp,1,13)", values)]
-        return {"data_mode": "Historical benchmark", "dataset": dataset, "total_flows": row[0] or 0,
-                "suspicious_flows": row[1] or 0, "protocols": protocols, "labels": labels,
-                "top_sources": sources, "top_destination_ports": ports, "hourly": hourly,
-                "mean_packets": row[2], "mean_duration_microseconds": row[3],
-                "time_range_utc": [row[4], row[5]] if row[4] else None, "risk_score_available": False}
+        summary = json.loads(_ensure_flow_stats_summary(connection, dataset))
+        connection.commit()
+        summary.pop("_summary_version", None)
+        summary["risk_score_available"] = False
+        return summary
     finally:
         connection.close()
 

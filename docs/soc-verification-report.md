@@ -1,12 +1,12 @@
 # SOC platform verification report
 
-**Verification time:** 2026-10-30 14:20 (UTC+01:00)
+**Verification time:** 2026-10-30 17:01 (UTC+01:00)
 **Repository:** `RayenBelhadj123/cyber-threat-detection-lab`, local clone `C:\Users\Dell\cyber-threat-lab`, branch `main`. The requested Desktop path `C:\Users\Dell\Desktop\cyber-threat-detection-lab` does not exist.
-**Publication:** no push or publish performed.
+**Publication:** baseline commit `6064c0b` was previously pushed; the follow-up changes described here are committed locally but have not been pushed.
 
 ## Full-dataset evidence
 
-The local store `artifacts/expanded_preparation/full_flows.sqlite` is present (4,772,315,136 bytes) and passed the API's live integrity comparison with preparation lineage, saved benchmark counts, labels, source dataset totals, feature-window count, and topology aggregate.
+The local store `artifacts/expanded_preparation/full_flows.sqlite` is present (4,772,331,520 bytes after statistics-cache materialization) and passed the API's live consistency comparison with preparation lineage, saved benchmark counts, labels, source dataset totals, feature-window count, and topology aggregate.
 
 | Measure | Verified |
 | --- | ---: |
@@ -18,9 +18,13 @@ The local store `artifacts/expanded_preparation/full_flows.sqlite` is present (4
 | CICIDS2017 indexed flows | 2,827,475 |
 | Separate CIC-DDoS2019 extension flows | 1,726,057 |
 | Aggregated feature windows | 197,941 |
+| Label aggregate flows | 4,553,532 |
+| Protocol aggregate flows | 4,553,532 |
+| Hourly aggregate flows | 4,553,532 |
 | Topology aggregate flows | 4,553,532 |
+| Suspicious reference-label aggregate | 2,259,959 |
 
-An actual in-process FastAPI request returned HTTP 200 for `/api/flows` with five requested rows, `total=4,553,532`, and source `Verified full-benchmark SQLite flow store`. `/api/flows/status` returned ready/200; its consistency check took about 0.98 seconds in this run. The 197,941 feature windows are not raw flows. The legacy `artifacts/flows.ndjson` has 170,217 Thursday-only historical records and remains a separate, explicitly limited view. No model metrics were converted into network events.
+Live HTTP calls to `/api/flows` returned exactly 500 rows for a 500-row request; the reported full total matched 4,553,532. Source-IP filtering and ascending timestamp ordering were checked against the returned records. An additional live check summed label, protocol and hourly aggregates to 4,553,532 each and matched the 2,259,959 suspicious-reference-label count to the topology aggregate. The 197,941 feature windows are not raw flows. The legacy `artifacts/flows.ndjson` has 170,217 Thursday-only historical records and remains a separate, explicitly limited view. No model metrics were converted into network events.
 
 The saved learning-size curve contains train AP and validation AP fields, but no validation-loss field/series. The UI reports that absence instead of inventing a loss chart. Full-benchmark flow queries use SQLite; a full expanded Elasticsearch index was not built.
 
@@ -28,54 +32,58 @@ The saved learning-size curve contains train AP and validation AP fields, but no
 
 | Check | Result |
 | --- | --- |
-| `./.venv/Scripts/python.exe -m pytest -q` | **290 passed** in 203.61 seconds (2026-10-30); includes full-store/API tests against the local benchmark store |
-| `./.venv/Scripts/python.exe -m pytest tests/test_full_flow_store.py tests/test_full_benchmark_flow_access.py tests/test_soc_api.py -q -ra` | **10 passed** in 46.13 seconds |
-| `./.venv/Scripts/python.exe -m pytest tests/test_full_benchmark_flow_access.py -q -ra` | **1 passed** in 40.99 seconds; verifies actual benchmark-store access |
-| `npm run build` | **Passed**; TypeScript project build and Vite production bundle, 2,324 modules transformed, 5.09 seconds |
-| `git diff --check` | **Passed**; only Git's LF-to-CRLF working-copy notices |
-| Python standard-library HTML parser on `docs/soc-architecture.html` | **Passed**, 13,284-byte file parsed |
-| FastAPI in-process real-store query | **Passed**, HTTP 200, 5 bounded rows returned, total 4,553,532 |
-| Full Playwright browser suite | **Not run**: the prior browser-test invocation was blocked pending approval; it was not retried |
+| `env -u PYTHONPATH ./.venv/Scripts/python.exe -m pytest -q` | **294 passed** in 126.64 seconds; full current suite |
+| `npm run build` | **Passed**; TypeScript + Vite, 2,324 modules transformed, 5.34 seconds |
+| PowerShell parser on `scripts/launch_soc.ps1` | **Passed** |
+| `git diff --check` | **Passed**; only Git LF-to-CRLF working-copy notices |
+| Local launcher | **Passed** after stopping the identified stale project API; API, React and Streamlit HTTP checks succeeded, expanded statistics cache warmed |
+| Real API `/api/flows/status` | **Ready**; build ID `78c2c6be5378`, indexed-record count matches expanded statistics |
+| Real full-store pagination/filter/sort | **Passed**; fetched 500 rows, ascending timestamps verified, source-IP filter returned matching rows |
+| Query bounds | **Passed**; `page_size=501` returned HTTP 422; maximum accepted page size is 500 |
+| Dataset partition check | **Passed**; CICIDS2017 2,827,475 + CIC-DDoS2019 1,726,057 = expanded 4,553,532 |
+| Real API `/api/datasets` | **Passed**; all four dataset/benchmark manifests available; expanded benchmark metrics present |
+| Full Playwright/browser suite | **Not run**: prior browser automation was blocked pending approval; not retried |
 | Responsive/browser performance verification | **Not verified** without the browser suite |
 
-The successful Python tests and production build verify the current source; they do not make the existing running API process reload itself.
+The local API process was separately restarted from current source and verified over HTTP; this is distinct from the Python in-process test client.
 
 ## Actual local service state
 
-Component probes were collected at `2026-10-29T13:28:48Z` (14:28:48 UTC+01:00). The component endpoint completed in about 2.05 seconds.
+Component probes were collected on 2026-10-30 around 16:36 UTC+01:00. These are point-in-time reachability checks.
 
 | Component | Observed state |
 | --- | --- |
-| Elasticsearch | Unavailable |
-| Kibana | Unavailable |
-| Kafka broker 1 | Unavailable |
-| Spark master UI | Unavailable |
-| Streamlit reporting workspace | Unavailable |
+| Elasticsearch | Unavailable (connection timed out) |
+| Kibana | Unavailable (connection timed out) |
+| Kafka broker 1 | Unavailable (connection timed out) |
+| Spark master UI | Unavailable (connection timed out) |
+| Streamlit reporting workspace | Healthy (HTTP reachability) |
 | Expanded ML benchmark artifact | Healthy |
 | Frozen inference artifact | Healthy |
 
 These are reachability/artifact checks, not claims about ingestion or freshness. No simulated health data was used.
 
-**Important running-process issue:** the API process already listening on `127.0.0.1:8000` is stale. Direct HTTP to `http://127.0.0.1:8000/api/flows/status` returned **404 Not Found**, while the current API source returns **200** in the in-process test client. Restart the API using the command in the README before using the currently open React dev server for full-flow exploration. No process was stopped or replaced during this work.
+The launcher detected the stale API by its absent/old source `build_id`, refused to kill it automatically, and completed startup after the known project API was stopped explicitly. A fresh API now answers `/api/flows/status` with ready=true. The local full-dataset query path returned 500 rows in a 3.4-second round trip including status/integrity checks; cached statistics returned the correct total in an 843 ms round trip including the same status check. These timings are local point measurements, not latency guarantees.
 
 ## Implemented
 
 - Built and verified a chunk-ingested full-flow SQLite index over the expanded benchmark; kept CICIDS2017 and CIC-DDoS2019 separate.
 - Added fail-closed status, paginated query, filtering, server-side sorting, dataset statistics and observed-flow topology API routes.
 - Added the React Flow investigation view, expanded dataset/index status, provenance labels, saved model comparison and held-out confusion matrix.
-- Added a real Streamlit health probe and Streamlit report link; the reporting app remains separate and was unavailable at verification time.
+- Added the Streamlit `SOC dashboard` workflow embedding the existing React UI, honest frontend/API/index availability guidance, and the one-command local launcher.
+- Added API source build-ID checking and statistics-cache validation; inconsistent cached totals now fail closed.
+- Versioned the aggregate cache and fixed expanded top-source/top-port rankings to aggregate over both datasets before selecting the global top 12.
 - Added an updated architecture diagram, launch instructions and explicit implementation/limitation documentation.
 - Inspected the Housing Streamlit source directly; REA was checked in the available MCP/plugin catalog, with no installable/available match found.
 
 ## Remaining work / limits
 
-1. Restart the stale API process on port 8000; the currently open browser is not yet confirmed to receive the new routes.
-2. Run the Playwright suite after browser-test approval; responsive behavior and actual browser-side flow investigation are not yet verified.
-3. Full-benchmark search is SQLite-backed, not Elasticsearch-backed. Existing Elasticsearch/Kibana services were unreachable.
-4. Kafka/Spark/Streamlit were unreachable; streaming freshness, consumer lag, processing throughput and end-to-end live detections are not integrated.
-5. Grounded AI analyst, evidence-reviewed MITRE ATT&CK mapping, Sigma execution, case management, and per-flow risk predictions remain unimplemented/unavailable.
-6. MongoDB/Cassandra are preserved but are not individual SOC health cards; the API has no authentication and is intended for loopback-only use.
+1. Browser-rendered E2E, responsive behavior and browser performance are unverified; the Playwright run remains approval-blocked. Current browser window was not used to interact with the user's separate hosted Streamlit app.
+2. Full-benchmark search is SQLite-backed, not Elasticsearch-backed. Elasticsearch/Kibana were unreachable in the latest point-in-time probe.
+3. Kafka/Spark were unreachable; streaming freshness, consumer lag, processing throughput and end-to-end live detections are not integrated. Streamlit itself is reachable locally.
+4. Grounded AI, analyst-reviewed ATT&CK mapping, Sigma rule execution and case management are not implemented. The companion plan documents evidence/privacy/validation gates; per-flow risk scores remain unavailable.
+5. MongoDB/Cassandra are preserved but are not individual SOC health cards; the API has no authentication and is intended for loopback-only use.
 
 ## Git state
 
-No commit or push has been made. The current uncommitted set contains the expanded benchmark, reporting/security changes, SOC API/UI, test and documentation files, plus an unrelated `facebook_profile_180.png` that should not be included. A generated `frontend/tsconfig.tsbuildinfo` is excluded by the updated ignore rule. Review/stage only project files; leave the unrelated image out. The repository's configured remote matches the requested GitHub repository.
+The follow-up project changes are committed locally and not pushed. `facebook_profile_180.png` is unrelated and remains untracked. No local benchmark database or generated build output is part of the commit.

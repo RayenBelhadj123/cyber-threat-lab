@@ -71,6 +71,9 @@ def test_app_expanded_scope_all_sections_use_saved_evidence(monkeypatch, expande
         at.sidebar.radio[0].set_value(section).run()
         assert not at.exception, section
         assert not at.error
+        if section == "SOC dashboard":
+            assert "Embedded SOC dashboard" in "\n".join(str(x.value) for x in at.title)
+            continue
         text = "\n".join(str(element.value) for kind in ("markdown", "caption", "warning", "info", "json") for element in at.get(kind))
         assert metrics["dataset"]["description"] in text
         assert metrics["split"]["method"] in text
@@ -86,6 +89,25 @@ def test_app_expanded_scope_all_sections_use_saved_evidence(monkeypatch, expande
             assert "controlled-sources.json" in text
             assert "CICIDS2017 Friday" in text
             assert "5-minute groups" not in at.dataframe[-2].value.columns
+
+
+def test_streamlit_soc_dashboard_embeds_existing_frontend(monkeypatch, expanded_scope_artifacts):
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setenv("CYBERLAB_BENCHMARK_DIR", str(expanded_scope_artifacts))
+    monkeypatch.setenv("CYBERLAB_SOC_FRONTEND_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("CYBERLAB_API_BASE_URL", "http://127.0.0.1:1/api")
+    at = AppTest.from_file(str(ROOT / "streamlit_app.py"), default_timeout=30).run()
+    assert not at.exception
+    assert "SOC dashboard" in at.sidebar.radio[0].options
+    at.sidebar.radio[0].set_value("SOC dashboard").run()
+    assert not at.exception
+    content = "\n".join(str(element.value) for kind in ("title", "caption", "info", "markdown") for element in at.get(kind))
+    assert "Embedded SOC dashboard" in content
+    assert "http://127.0.0.1:1" in content
+    warning = "\\n".join(str(element.value) for element in at.warning)
+    assert "Frontend unavailable" in warning
+    assert "API unavailable" in warning
+    assert "Full-flow index unavailable" in warning
 
 
 def test_legacy_thursday_scope_is_preserved_in_app_and_exports(monkeypatch, expanded_scope_artifacts):
@@ -189,7 +211,7 @@ def test_app_all_sections_selectors_and_downloads(monkeypatch):
     at = AppTest.from_file(str(ROOT / "streamlit_app.py"), default_timeout=30).run()
     assert not at.exception
     sections = list(at.sidebar.radio[0].options)
-    assert len(sections) == 6
+    assert len(sections) == 7
     assert len(at.metric) >= 4
     for section in sections:
         at.sidebar.radio[0].set_value(section).run()

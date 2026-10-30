@@ -1,5 +1,9 @@
+import hashlib
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
+from cyberlab import flow_store
 from api.main import app
 
 client = TestClient(app)
@@ -23,6 +27,16 @@ def test_ml_api_preserves_saved_candidate_and_evaluation_splits():
     assert body['split']['test_windows'] > 0
     assert body['caveats']
     assert 'pytorch_mlp' in body['models']
+
+
+def test_health_endpoint_reports_source_build_id():
+    from api import main as api
+    api_hash = hashlib.sha256(Path(api.__file__).read_bytes()).hexdigest()
+    store_hash = hashlib.sha256(Path(flow_store.__file__).read_bytes()).hexdigest()
+    expected = hashlib.sha256(f"{api_hash}:{store_hash}".encode()).hexdigest()[:12]
+    response = client.get('/api/health')
+    assert response.status_code == 200
+    assert response.json()['build_id'] == expected
 
 
 def test_health_endpoint_reports_api_but_not_fake_live_data():

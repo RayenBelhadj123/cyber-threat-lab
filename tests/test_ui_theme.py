@@ -30,4 +30,4 @@ def test_benchmark_has_collapsible_evidence_instead_of_a_large_warning_wall():
     app=AppTest.from_file(str(ROOT/'streamlit_app.py'),default_timeout=30).run()
     assert not app.exception and not app.error
     assert any(x.label=='Dataset scope & validation limits' for x in app.expander)
-    assert app.sidebar.radio[0].options==['Executive summary','Model comparison','Model diagnostics','Learning curve','Dataset & governance','Report generator']
+    assert app.sidebar.radio[0].options==['Executive summary','Model comparison','Model diagnostics','Learning curve','Dataset & governance','Report generator','SOC dashboard']

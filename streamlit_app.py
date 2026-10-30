@@ -18,7 +18,7 @@ st.set_page_config(page_title="Cyber Threat Lab | Evidence workspace", page_icon
 from cyberlab.ui_theme import apply_theme, style_chart
 apply_theme()
 
-SECTIONS = ("Executive summary", "Model comparison", "Model diagnostics", "Learning curve", "Dataset & governance", "Report generator")
+SECTIONS = ("Executive summary", "Model comparison", "Model diagnostics", "Learning curve", "Dataset & governance", "Report generator", "SOC dashboard")
 st.sidebar.markdown("## 🛡️ Cyber Threat Lab")
 st.sidebar.caption("Data · Detection · Evidence")
 data_mode = st.sidebar.segmented_control("Data mode", ["Reports", "Run data", "Live data"], default="Reports", key="cyber_detection_mode", width="stretch", wrap=False)
@@ -31,6 +31,40 @@ if st.sidebar.toggle("Full analytics workspace", value=False, key="full_analytic
     render_workspace(Path(__file__).resolve().parent)
     st.stop()
 section = st.sidebar.radio("Workflow", SECTIONS)
+if section == "SOC dashboard":
+    from urllib.error import HTTPError, URLError
+    from urllib.request import urlopen
+
+    soc_url = os.environ.get("CYBERLAB_SOC_FRONTEND_URL", "http://127.0.0.1:5173").rstrip("/")
+    api_base = os.environ.get("CYBERLAB_API_BASE_URL", "http://127.0.0.1:8000/api").rstrip("/")
+
+    def probe(url):
+        try:
+            with urlopen(url, timeout=0.75) as response:
+                return f"available (HTTP {response.status})"
+        except HTTPError as exc:
+            return f"unavailable (HTTP {exc.code})"
+        except (URLError, TimeoutError, OSError) as exc:
+            return f"unavailable ({type(exc).__name__})"
+
+    frontend_state = probe(soc_url)
+    api_state = probe(f"{api_base}/health")
+    index_state = probe(f"{api_base}/flows/status")
+
+    st.title("Embedded SOC dashboard")
+    st.caption("React SOC interface embedded here; it uses the local FastAPI service for full-flow investigations.")
+    st.caption(f"Embedded frontend: {soc_url}")
+    st.subheader("Connection status")
+    st.write(f"Frontend: {frontend_state}")
+    st.write(f"API: {api_state}")
+    st.write(f"Full-flow index: {index_state}")
+    for label, value in (("Frontend", frontend_state), ("API", api_state), ("Full-flow index", index_state)):
+        if value.startswith("unavailable"):
+            st.warning(f"{label} unavailable — check that its service is running and the configured URL is correct.")
+    st.link_button("Open SOC dashboard in a new tab", soc_url)
+    st.iframe(soc_url, height=920)
+    st.info("If the embedded view is blank, start the FastAPI service on 127.0.0.1:8000 and the React frontend on 127.0.0.1:5173. The expanded flow database is local and is not downloaded from GitHub. Set CYBERLAB_SOC_FRONTEND_URL or CYBERLAB_API_BASE_URL if you use different addresses.")
+    st.stop()
 st.sidebar.divider()
 st.sidebar.caption("Read-only reporting • no retraining\n\nLocal experiment, not production validation")
 artifact_dir = Path(os.environ.get("CYBERLAB_BENCHMARK_DIR", str(resolve_artifact_directory(Path(__file__).resolve().parent))))

@@ -5,6 +5,7 @@ Historical benchmark and event times are never described as current telemetry.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 import json
 import os
 import socket
@@ -19,7 +20,7 @@ from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from cyberlab.flow_store import flow_stats, flow_topology, query_flows
+from cyberlab.flow_store import FLOW_STATS_SUMMARY_VERSION, flow_stats, flow_topology, query_flows
 
 ROOT = Path(__file__).resolve().parents[1]
 ARTIFACTS = Path(os.getenv("CYBERLAB_ARTIFACTS", ROOT / "artifacts"))
@@ -31,6 +32,9 @@ PREPARATION = Path(os.getenv("CYBERLAB_EXPANDED_PREPARATION", ARTIFACTS / "expan
 ES_URL = os.getenv("CYBERLAB_ELASTICSEARCH_URL", "http://127.0.0.1:19200").rstrip("/")
 KIBANA_URL = os.getenv("CYBERLAB_KIBANA_URL", "http://127.0.0.1:15601").rstrip("/")
 STREAMLIT_URL = os.getenv("CYBERLAB_STREAMLIT_URL", "http://127.0.0.1:8502").rstrip("/")
+API_SOURCE_HASH = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+FLOW_STORE_SOURCE_HASH = hashlib.sha256((ROOT / "cyberlab" / "flow_store.py").read_bytes()).hexdigest()
+API_BUILD_ID = hashlib.sha256(f"{API_SOURCE_HASH}:{FLOW_STORE_SOURCE_HASH}".encode()).hexdigest()[:12]
 
 app = FastAPI(title="Cyber Threat Lab SOC API", version="1.0.0", description="Read-only APIs for saved cybersecurity evidence and real service health.")
 app.add_middleware(CORSMiddleware, allow_origins=os.getenv("CYBERLAB_API_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","), allow_methods=["GET"], allow_headers=["*"])
@@ -116,7 +120,7 @@ def benchmark_data() -> tuple[dict | None, Path]:
 
 @app.get("/api/health")
 def api_health():
-    return {"status": "healthy", "service": "cyber-threat-lab-api", "mode": "read-only", "checked_at": datetime.now(timezone.utc).isoformat()}
+    return {"status": "healthy", "service": "cyber-threat-lab-api", "mode": "read-only", "build_id": API_BUILD_ID, "checked_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/summary")
@@ -198,11 +202,27 @@ def full_flow_store_status() -> dict[str, Any]:
         return {"status": "unavailable", "ready": False, "path": str(FLOW_STORE),
                 "detail": "Full-benchmark raw-flow store is not built; run python scripts/build_full_flow_store.py."}
     reasons = []
+    stats_summary = None
     try:
         with sqlite3.connect(FLOW_STORE) as db:
             actual = int(db.execute("SELECT COUNT(*) FROM flows").fetchone()[0])
             actual_by_dataset = {name: count for name, count in db.execute("SELECT dataset,COUNT(*) FROM flows GROUP BY dataset")}
             topology_rows, topology_malicious = db.execute("SELECT COALESCE(SUM(flow_count),0),COALESCE(SUM(malicious_count),0) FROM flow_topology").fetchone()
+            try:
+                cached = db.execute("SELECT summary_json FROM flow_stats_summary WHERE dataset='expanded'").fetchone()
+            except sqlite3.OperationalError as exc:
+                if "no such table" not in str(exc).lower():
+                    raise
+                cached = None
+            if cached:
+                try:
+                    parsed_summary = json.loads(cached[0])
+                    if isinstance(parsed_summary, dict):
+                        stats_summary = parsed_summary
+                    else:
+                        reasons.append("cached flow statistics have an invalid structure")
+                except (TypeError, json.JSONDecodeError):
+                    reasons.append("cached flow statistics are not valid JSON")
     except (OSError, sqlite3.Error) as exc:
         return {"status": "invalid", "ready": False, "path": str(FLOW_STORE), "detail": f"Could not verify flow store: {exc}"}
     metrics = read_json(EXPANDED / "metrics.json") or {}
@@ -238,6 +258,19 @@ def full_flow_store_status() -> dict[str, Any]:
         reasons.append("prepared feature-window aggregation count differs from benchmark metadata")
     if topology_rows != actual or topology_malicious != expected_malicious:
         reasons.append("topology aggregation does not conserve flow and reference-label counts")
+    if stats_summary is not None and stats_summary.get("_summary_version") != FLOW_STATS_SUMMARY_VERSION:
+        stats_summary = None
+    if stats_summary is not None:
+        try:
+            cached_count = int(str(stats_summary.get("total_flows")))
+            cached_label_count = sum(int(str(value)) for value in stats_summary.get("labels", {}).values())
+            cached_suspicious = int(str(stats_summary.get("suspicious_flows")))
+            if cached_count != actual or cached_label_count != actual:
+                reasons.append("cached dashboard statistics do not conserve indexed flow and label counts")
+            if cached_suspicious != topology_malicious:
+                reasons.append("cached suspicious-flow total differs from the verified topology aggregate")
+        except (AttributeError, TypeError, ValueError):
+            reasons.append("cached dashboard statistics have invalid count fields")
     return {"status": "ready" if not reasons else "inconsistent", "ready": not reasons,
             "path": str(FLOW_STORE), "data_mode": "Historical benchmark",
             "dataset_scope": ["CICIDS2017", "CICDDoS2019"], "input_rows": meta.get("input_rows"),
@@ -246,6 +279,7 @@ def full_flow_store_status() -> dict[str, Any]:
             "blank_rows": meta.get("blank_rows"), "dataset_counts": actual_by_dataset,
             "indexed_records": actual, "topology_aggregated_flow_count": topology_rows,
             "topology_aggregated_suspicious_count": topology_malicious,
+            "dashboard_statistics_cached": stats_summary is not None,
             "risk_score_available": False, "integrity_check": meta.get("integrity_check"),
             "database_bytes": FLOW_STORE.stat().st_size,
             "detail": "; ".join(reasons) if reasons else "Flow, label, dataset, topology and feature-window counts match saved benchmark metadata."}

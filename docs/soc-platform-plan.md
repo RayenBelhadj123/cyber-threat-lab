@@ -38,7 +38,7 @@ The manifest-listed expanded benchmark comprises eight CICIDS2017 CSVs and three
 | Blank CSV rows tracked separately | 288,602 |
 | CICIDS2017 / CIC-DDoS2019 valid flows | 2,827,475 / 1,726,057 |
 | Aggregated feature windows (not raw flows) | 197,941 |
-| SQLite store size | 4,772,315,136 bytes (about 4.77 GB) |
+| SQLite store size | 4,772,331,520 bytes (about 4.77 GB, including cached dashboard statistics) |
 | Topology aggregate flow total | 4,553,532 |
 
 The input accounting invariant is `input_rows = valid_flows + invalid_rows + duplicate_rows`; blank rows are separate. The topology total and suspicious-reference-label aggregate match the saved evidence. `artifacts/flows.ndjson` remains a separate 170,217-record Thursday-only historical capture. Model metrics are never converted into synthetic event records. Risk scores/per-flow predictions are unavailable in the full-flow store.
@@ -71,6 +71,8 @@ The saved experiment did not contain a validation-loss series, so the UI identif
 
 ### Launch (Windows PowerShell)
 
+**Primary local entry:** run `powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\\launch_soc.ps1` from the repository root, then open Streamlit at `http://127.0.0.1:8502` and select **Workflow → SOC dashboard**. The launcher starts or reuses the local API, React frontend and Streamlit services; it verifies the API source build ID, refuses stale/unknown listeners instead of terminating them, waits for actual HTTP readiness, and prepares the expanded statistics cache. The React interface is still directly available at `http://127.0.0.1:5173`.
+
 Install API dependencies and start it from the repository root:
 
 ```powershell
@@ -92,15 +94,15 @@ npm ci
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173`. The default API base is `http://127.0.0.1:8000/api`; Streamlit is linked/probed at port 8502 by default and can be changed with `CYBERLAB_STREAMLIT_URL`. The local API is unauthenticated and must remain loopback-bound unless authentication and deployment hardening are added.
+For manual startup, open Streamlit at `http://127.0.0.1:8502` and choose **SOC dashboard**; the React frontend remains directly available at `http://127.0.0.1:5173`. The default API base is `http://127.0.0.1:8000/api`; Streamlit is linked/probed at port 8502 by default and can be changed with `CYBERLAB_STREAMLIT_URL`. The local API is unauthenticated and must remain loopback-bound unless authentication and deployment hardening are added.
 
 ### Verification and live-service limits
 
-FastAPI's in-process tests exercised full-flow status, real-data pagination/filtering, aggregate consistency and dataset separation against the actual SQLite database. Current source reports the store ready; measured status verification was about 0.98 seconds. Full data stays server-side; the browser only requests bounded pages and aggregates.
+The current 294-test Python suite exercises full-flow status, filtering, pagination, sorting, cached-stat integrity and dataset separation. Live API checks against the local SQLite index returned all 4,553,532 flows, confirmed 500-row query bounds, timestamp sorting and source-IP filters. The API's cached statistics are checked against indexed counts and topology; the launcher prepares that cache before opening Streamlit. Full data stays server-side; the browser only requests bounded pages and aggregates.
 
-At the latest local reachability snapshot, Elasticsearch, Kibana, Kafka broker 1, Spark master UI, and Streamlit were unavailable; saved expanded benchmark and frozen inference artifacts were healthy. These checks report connection state only, not ingestion, freshness, consumer lag, or Spark throughput.
+At the 2026-10-30 16:36 UTC+01:00 reachability snapshot, Streamlit, saved expanded benchmark and frozen inference artifact were healthy. Elasticsearch, Kibana, Kafka broker 1 and Spark master UI timed out. These checks report connection state only, not ingestion, freshness, consumer lag, or Spark throughput.
 
-The API process already listening on port 8000 is stale: direct HTTP to `/api/flows/status` returns 404, while the current source returns 200 in the in-process test client. Restart the API with the command above before relying on the currently open React dev server for full-flow access.
+On 2026-10-30, the launcher detected stale API processes by comparing the `/api/health` source build ID to the current API and flow-store source hashes; it refused to terminate unknown listeners. After the identified stale project API was stopped, the launcher started the current API and verified `/api/flows/status` HTTP 200, full-index readiness and a rebuilt version-2 statistics cache. Current source build ID: `78c2c6be5378`.
 
 ### Still incomplete
 
@@ -110,7 +112,14 @@ The API process already listening on port 8000 is stale: direct HTTP to `/api/fl
 - Per-flow model predictions/risk scores (not present in source artifacts).
 - Individual SOC health probes for MongoDB and Cassandra.
 - Production authentication/authorization and multi-user hardening.
-- Latest frontend production build, full Playwright suite, responsive behavior and browser performance verification; see [the verification report](soc-verification-report.md).
+- Browser-rendered E2E, responsive behavior and browser performance remain unverified; the previously approval-blocked Playwright run was not retried. Current Python suite and production-build evidence is in [the verification report](soc-verification-report.md).
+
+### Security-workflow scope and evidence gates
+
+- **ATT&CK:** not implemented. Add only a versioned, analyst-reviewed mapping from exact dataset labels or detector evidence to candidate techniques; every mapping must carry source evidence, scope and uncertainty. Broad benchmark labels alone must not be displayed as confirmed technique attribution.
+- **Sigma:** not implemented. Before executing rules, validate supported log sources and fields against the actual stored event schema, pin the Sigma ruleset/parser version, and test matches/non-matches on observed records. No alert count may be inferred from ML metrics.
+- **AI explanations:** not implemented. Any later assistant must receive bounded saved evidence, cite each claim to evidence identifiers, abstain when evidence is insufficient, avoid changing scores/alerts, and pass prompt-injection/privacy tests. Provider access and data-retention controls must be explicit.
+- **Cases:** not implemented. A later case workflow needs evidence references, analyst-authored notes, explicit state transitions and an audit trail; authentication/authorization is a prerequisite for multi-user use.
 
 ## Reference research
 
