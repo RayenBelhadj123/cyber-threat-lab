@@ -101,6 +101,20 @@ This acquires three complete, checksum-pinned CIC-DDoS2019 mirror CSVs (NTP ampl
 
 Keep this extension separate from CICIDS2017. It is attack-heavy and must not determine a production-like evaluation class balance. Hold out an independent capture/domain before tuning, deduplicate/group flows, and explicitly align feature definitions. The mirror also contains 2018-looking timestamp strings despite its CIC-DDoS2019 label; raw values are preserved and the ambiguity must be resolved before temporal integration. No current model is retrained and no improvement is claimed merely because additional attack rows were downloaded. The downloader uses a pinned, unofficial Hugging Face mirror attributed to CIC/UNB and does not publish raw data to GitHub.
 
+## Expanded benchmark status (local, not activated)
+
+The separately saved full-week plus attack-extension experiment has completed: **4,610,049 raw data rows**, **197,941 feature windows**. Whole-capture development CV selected PyTorch MLP, but its frozen threshold detected only **61 of 778 held-out attack windows**, missed **717**, and produced **39 false alerts**. It has **not replaced the active Thursday-only Extra Trees detector**. More data did not establish reliable generalization.
+
+To reproduce the offline experiment without altering the active reports or detector:
+
+```bash
+.venv/Scripts/python.exe scripts/run_expanded_benchmark.py
+```
+
+This uses all eleven checksum-verified full-week/extension CSVs and excludes the overlapping `data/raw` Thursday input. Results go to `artifacts/model_benchmark_expanded/`, with reusable preparation in `artifacts/expanded_preparation/`. The command refuses an existing nonempty output directory before verifying inputs or fitting models; use `--output` with a fresh directory for another experiment. Do not tune on the now-inspected holdout or automatically promote the selected candidate.
+
+See [the October 29 integrity follow-up](docs/maintenance-2026-10-29.md) for overwrite protection, label/metric validation and the final verification results. [The October 28 maintenance review](docs/maintenance-2026-10-28.md) records the earlier release-validation fixes and browser checks. Each review describes its own service state.
+
 ## Windows one-click Kibana launcher
 
 Build the shield-icon launcher from the repository root:
@@ -184,13 +198,34 @@ The server-side `CYBERLAB_LIVE_ELASTICSEARCH_URL` defaults to `http://127.0.0.1:
 
 Results identify **suspicious source IPs for analyst review**, not confirmed attackers. Identifier-reduced uploads can be scored but cannot identify hosts. The current detector remains Thursday-only and has not been retrained on the downloaded extensions. The packaged `.skops` model is hash/version checked; arbitrary model uploads are not accepted in detection mode.
 
-See `docs/project-structure.md` for module ownership and reproducible checks, and `docs/project-audit.md` for verified coverage and remaining operating limits.
+See `docs/project-structure.md` for module ownership and reproducible checks, `docs/project-audit.md` for verified coverage and remaining operating limits, and `docs/soc-platform-plan.md` for the SOC roadmap and React/FastAPI implementation.
+
+### React SOC evidence dashboard
+
+The React/TypeScript SOC surface adds full historical-flow exploration without replacing the existing Streamlit, Kibana, or pipeline work. It serves the verified expanded raw-flow index from a local SQLite store with server-side pagination, filters, sorting, statistics, and topology; it does **not** claim full-benchmark Elasticsearch indexing. The overview, saved ML evidence, dataset provenance, React Flow investigations, and point-in-time service health remain distinct from the legacy Thursday-only flow capture. The live health checks report reachability, not Kafka lag, Spark throughput, or data freshness.
+
+The full store is built locally from the 11 manifest-listed benchmark CSVs in bounded chunks; the roughly 4.77 GB database is ignored by Git and must not be copied into the repository. If absent, create it with `.venv\Scripts\python.exe scripts\build_full_flow_store.py --chunk-size 50000`. The API fails closed when it is absent or inconsistent instead of substituting the smaller legacy capture.
+
+```powershell
+uv pip install --python .venv\Scripts\python.exe -r requirements-soc.txt
+.venv\Scripts\python.exe -m uvicorn api.main:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+Open `http://127.0.0.1:5173`. The default API base is `http://127.0.0.1:8000/api`; the Streamlit report link defaults to `http://127.0.0.1:8502` and its health probe can be configured with `CYBERLAB_STREAMLIT_URL`. See [the SOC implementation and limitations](docs/soc-platform-plan.md), [the feature-parity review](docs/analytics-feature-parity.md), [the architecture diagram](docs/soc-architecture.html), and [the verification report](docs/soc-verification-report.md). To run the browser suite, start the API and frontend, then run `npm run test:e2e` from `frontend`; this verification pass did not run it.
 
 ### Streamlit Community Cloud
 
 Create an app with these settings:
 
-- Repository: `RayenBelhadj123/cyber-threat-lab`
+- Repository: `RayenBelhadj123/cyber-threat-detection-lab`
 - Branch: `main`
 - Main file path: `streamlit_app.py`
 - Python: `3.12`

@@ -16,3 +16,10 @@ probe.csv
 !.env.example
 .streamlit/secrets.toml
 *.log
+
+# React SOC frontend dependencies and generated browser/build outputs.
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/*.tsbuildinfo

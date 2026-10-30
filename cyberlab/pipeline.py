@@ -47,7 +47,7 @@ def load_flows(input_path, max_rows=None, require_label=True):
     if max_rows is not None and max_rows < 1:
         raise ValueError("max_rows must be positive")
     frames = []
-    lineage = {"input_rows": 0, "invalid_rows": 0, "duplicate_rows": 0, "files": [], "labels_available": True, "timezone": "America/Moncton", "timestamp_policy": "dayfirst; ambiguous/nonexistent local times rejected", "failure_ratio": "Unavailable in CICIDS2017 flow schema; default 0 (not inferred from labels)."}
+    lineage = {"input_rows": 0, "blank_rows": 0, "invalid_rows": 0, "duplicate_rows": 0, "files": [], "labels_available": True, "timezone": "America/Moncton", "timestamp_policy": "dayfirst; ambiguous/nonexistent local times rejected", "failure_ratio": "Unavailable in CICIDS2017 flow schema; default 0 (not inferred from labels)."}
     for file in files:
         if max_rows is not None and lineage["input_rows"] >= max_rows:
             break
@@ -67,6 +67,13 @@ def load_flows(input_path, max_rows=None, require_label=True):
         file_info["encoding"] = encoding
         lineage["files"].append(file_info)
         for frame in pd.read_csv(file, chunksize=100000, encoding=encoding, low_memory=False):
+            # GeneratedLabelledFlows contains comma-only placeholder records.
+            # Count data rows consistently with acquisition manifests, not blank padding.
+            blank = frame.isna().all(axis=1)
+            lineage['blank_rows'] += int(blank.sum())
+            frame = frame.loc[~blank].copy()
+            if frame.empty:
+                continue
             if max_rows is not None:
                 frame = frame.iloc[:max_rows-lineage["input_rows"]].copy()
             lineage["input_rows"] += len(frame)

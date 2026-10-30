@@ -315,7 +315,49 @@ def sample_group_indices(indices, groups, y, fraction: float, random_state: int 
     return np.sort(sampled)
 
 
-def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=5, random_state=42):
+def validate_benchmark_split(windows, split):
+    """Reject leakage or incomplete OOF coverage before any model fitting."""
+    groups = np.asarray(split['groups'])
+    if groups.shape != (len(windows),):
+        raise ValueError('Split groups must align with all prepared windows.')
+    if 'capture_group' in windows:
+        expected_groups = windows.capture_group.to_numpy(dtype=str)
+    else:
+        expected_groups = windows.timestamp.dt.floor(f"{split['group_minutes']}min").astype(str).to_numpy()
+    if not np.array_equal(groups, expected_groups):
+        raise ValueError('Split groups disagree with the prepared window grouping.')
+
+    def checked_indices(values):
+        indices = np.asarray(values)
+        if (indices.ndim != 1 or not len(indices) or indices.dtype.kind not in 'iu'
+                or np.any(indices < 0) or np.any(indices >= len(windows))
+                or len(np.unique(indices)) != len(indices)):
+            raise ValueError('Split indices must be nonempty, unique, in-range integers.')
+        return indices
+
+    dev = checked_indices(split['dev_indices'])
+    test = checked_indices(split['test_indices'])
+    dev_set, test_set = set(dev), set(test)
+    if dev_set & test_set or dev_set | test_set != set(range(len(windows))):
+        raise ValueError('Split development/test indices must partition all windows.')
+    if set(groups[dev]) & set(groups[test]):
+        raise ValueError('Split development/test groups overlap.')
+    validation_counts = np.zeros(len(windows), dtype=int)
+    for fold in split['inner_folds']:
+        train = checked_indices(fold['train_indices'])
+        validation = checked_indices(fold['validation_indices'])
+        train_set, validation_set = set(train), set(validation)
+        if (not train_set <= dev_set or not validation_set <= dev_set
+                or train_set & validation_set or train_set | validation_set != dev_set):
+            raise ValueError('CV split indices must partition development only; held-out rows are forbidden.')
+        if set(groups[train]) & set(groups[validation]):
+            raise ValueError('CV split training/validation groups overlap.')
+        validation_counts[validation] += 1
+    if not np.all(validation_counts[dev] == 1):
+        raise ValueError('OOF coverage must validate every development window exactly once.')
+
+
+def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=5, random_state=42, prepared=None, model_names=None):
     """Train candidates with grouped inner CV, select by CV AP, and test once on held-out groups."""
     import importlib.metadata
     import json
@@ -325,19 +367,34 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
     from sklearn.metrics import average_precision_score, roc_auc_score
     from .pipeline import FEATURES, aggregate_windows, load_flows
 
-    flows, lineage = load_flows(input_path, max_rows=max_rows)
-    windows = aggregate_windows(flows)
-    split = create_grouped_splits(windows, group_minutes=group_minutes, random_state=random_state)
+    if prepared is None:
+        flows, lineage = load_flows(input_path, max_rows=max_rows)
+        windows = aggregate_windows(flows)
+        valid_flow_count = len(flows)
+        row_labels = flows['label'].value_counts().to_dict()
+        split = create_grouped_splits(windows, group_minutes=group_minutes, random_state=random_state)
+    else:
+        if max_rows is not None:
+            raise ValueError('Prepared full-data benchmarks cannot silently truncate inputs.')
+        windows, lineage, split = prepared['windows'], prepared['lineage'], prepared['split']
+        valid_flow_count = lineage['valid_rows']
+        row_labels = lineage['row_labels']
+        group_minutes = split['group_minutes']
+    validate_benchmark_split(windows, split)
+    candidate_names = tuple(MODEL_NAMES if model_names is None else model_names)
+    if not candidate_names or len(set(candidate_names)) != len(candidate_names) or set(candidate_names) - set(MODEL_NAMES):
+        raise ValueError('Select unique supported benchmark candidates.')
     x = windows[FEATURES].astype(float).to_numpy()
     y = windows["malicious"].to_numpy(dtype=bool)
     dev = split["dev_indices"]
     test = split["test_indices"]
-    records = {name: {"cv_folds": [], "fold_epochs": [], "oof_scores": np.full(len(windows), np.nan)} for name in MODEL_NAMES}
+    records = {name: {"cv_folds": [], "fold_epochs": [], "oof_scores": np.full(len(windows), np.nan)} for name in candidate_names}
 
     for fold_number, fold in enumerate(split["inner_folds"]):
         train_idx = fold["train_indices"]
         val_idx = fold["validation_indices"]
-        for name in MODEL_NAMES:
+        for name in candidate_names:
+            print(f'CV fold {fold_number+1}/{len(split["inner_folds"])}: {name}; train={len(train_idx):,}, validation={len(val_idx):,}', flush=True)
             model, train_scores, val_scores, fit_info = fit_candidate(
                 name, x[train_idx], y[train_idx], x[val_idx], y[val_idx],
                 seed=random_state + fold_number,
@@ -359,6 +416,7 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
             })
             if fit_info.get("epochs") is not None:
                 records[name]["fold_epochs"].append(int(fit_info["epochs"]))
+            print(f'Completed {name}: train AP={train_ap:.6f}, validation AP={val_ap:.6f}', flush=True)
 
     for name, record in records.items():
         oof_scores = record.pop("oof_scores")
@@ -379,11 +437,13 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
         record["_oof_scores"] = oof_scores
 
     selected_name = select_best_model(records)
+    print(f'CV-selected candidate: {selected_name}; held-out scores have not been evaluated.', flush=True)
     selected_fixed_epochs = None
     if selected_name == "pytorch_mlp":
         selected_fixed_epochs = max(1, int(round(statistics.median(records[selected_name]["fold_epochs"]))))
     learning_curve = []
     for fraction in [0.25, 0.5, 0.75, 1.0]:
+        print(f'Whole-group learning curve: {fraction:.0%}', flush=True)
         fraction_train_ap, fraction_validation_ap = [], []
         fraction_sizes, fraction_positive = [], []
         for fold_number, fold in enumerate(split["inner_folds"]):
@@ -412,6 +472,7 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
 
     final_models = {}
     for name, record in records.items():
+        print(f'Final development-only fit and frozen-threshold holdout evaluation: {name}', flush=True)
         fixed_epochs = None
         if name == "pytorch_mlp":
             fixed_epochs = max(1, int(round(statistics.median(record["fold_epochs"]))))
@@ -432,10 +493,10 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
     selected_test = selected_record["test_metrics"]
     window_label_counts = windows.loc[windows["malicious"], "reference_label"].value_counts().to_dict()
     group_meta = {
-        "method": f"StratifiedGroupKFold on {group_minutes}-minute UTC window-time buckets; outer fold 0 held out as test; 4 inner folds on the remaining development groups",
+        "method": split.get('method', f"StratifiedGroupKFold on {group_minutes}-minute UTC window-time buckets; outer fold 0 held out as test; {len(split['inner_folds'])} inner folds on development groups"),
         "group_minutes": group_minutes,
-        "outer_test_fold": 0,
-        "temporal_policy": "shuffled_group_holdout_not_forward_in_time",
+        "outer_test_fold": split['outer_test_fold'],
+        "temporal_policy": split['temporal_policy'],
         "dev_windows": int(len(dev)),
         "dev_positives": int(y[dev].sum()),
         "dev_groups": int(len(set(split["groups"][dev]))),
@@ -455,14 +516,14 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
     report = {
         "schema_version": 1,
         "dataset": {
-            "description": "Full available CICIDS2017 Thursday slice; no arbitrary row subsampling.",
+            "description": prepared['description'] if prepared is not None else "Full available CICIDS2017 Thursday slice; no arbitrary row subsampling.",
             "input_rows": lineage["input_rows"],
-            "valid_flows": int(len(flows)),
+            "valid_flows": int(valid_flow_count),
             "window_count": int(len(windows)),
             "positive_windows": int(y.sum()),
             "negative_windows": int((~y).sum()),
             "positive_window_labels": {str(k): int(v) for k, v in window_label_counts.items()},
-            "row_labels": {str(k): int(v) for k, v in flows["label"].value_counts().to_dict().items()},
+            "row_labels": {str(k): int(v) for k, v in row_labels.items()},
             "positive_source_ips": sorted(windows.loc[windows["malicious"], "source_ip"].unique().tolist()),
             "positive_window_time_range_utc": [windows.loc[windows["malicious"], "timestamp"].min().isoformat(),
                                                 windows.loc[windows["malicious"], "timestamp"].max().isoformat()],
@@ -472,7 +533,7 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
         "learning_curve": learning_curve,
         "selection": {
             "model": selected_name,
-            "primary_metric": "mean 4-fold grouped cross-validation average precision",
+            "primary_metric": f"mean {len(split['inner_folds'])}-fold grouped cross-validation average precision",
             "selected_mean_cv_average_precision": selected_record["mean_cv_average_precision"],
             "test_used_for_selection": False,
             "threshold_policy": "Per-model threshold maximizes F1 on development out-of-fold scores; threshold is frozen before held-out test evaluation.",
@@ -483,7 +544,7 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
             "metrics": selected_test,
             "model_test_metrics": {name: record["test_metrics"] for name, record in records.items()},
         },
-        "caveats": [
+        "caveats": prepared['caveats'] if prepared is not None else [
             "Only 68 positive source-IP/minute windows are available; all come from one source IP and a single continuous web-attack period.",
             "Five-minute grouped splits prevent windows from the same short time bucket crossing folds, but do not prove generalization to independent attack campaigns, hosts, or networks.",
             "The held-out test contains a small number of positive windows; test metrics are exploratory and have high uncertainty.",
@@ -494,6 +555,13 @@ def run_model_benchmark(input_path, output_dir, *, max_rows=None, group_minutes=
                     "torch": importlib.metadata.version("torch"), "numpy": importlib.metadata.version("numpy"),
                     "pandas": importlib.metadata.version("pandas")},
     }
+
+    if prepared is not None:
+        report['preparation'] = lineage
+        report['dataset']['capture_support'] = {
+            str(group): {'windows': int(len(frame)), 'positive_windows': int(frame.malicious.sum())}
+            for group, frame in windows.groupby('capture_group')
+        }
 
     # Flatten fold/model scores into auditable CSV files.
     cv_rows = []
@@ -933,7 +1001,7 @@ code {{ overflow-wrap:anywhere; }}
 @media(max-width:700px) {{ body {{padding:10px}} table {{display:block; overflow-x:auto}} }}
 </style></head><body>
 <h1>🛡️ Cyber Threat Lab — model benchmark</h1>
-<p class="sub">Full available Thursday slice · grouped {split['group_minutes']}-minute window split · model selection by mean inner-CV average precision</p>
+<p class="sub">{html.escape(dataset.get('description', 'Flow-window benchmark'))} · {html.escape(split['method'])} · model selection by mean inner-CV average precision</p>
 <div class="grid">
   <div class="card"><div class="muted">Raw labeled flow rows</div><div class="kpi">{dataset['input_rows']:,}</div></div>
   <div class="card"><div class="muted">Valid normalized flows</div><div class="kpi">{dataset['valid_flows']:,}</div></div>
@@ -943,7 +1011,7 @@ code {{ overflow-wrap:anywhere; }}
   <div class="card"><div class="muted">Held-out test support</div><div class="kpi">{split['test_windows']:,} / {split['test_positives']} positive</div></div>
 </div>
 {interactive_block}
-<div class="warn"><strong>Interpret cautiously:</strong> the full row set is used, but it contains only {dataset['positive_windows']} positive windows. Grouped CV keeps each {split['group_minutes']}-minute bucket intact, but group assignment is shuffled rather than a forward-in-time test. All positives still come from one source host and one continuous web-attack period, so this does not prove generalization to future or independent attack campaigns.</div>
+<div class="warn"><strong>Interpret cautiously:</strong> {html.escape(split['method'])} Observed positive windows: {dataset['positive_windows']:,}. A held-out capture result does not establish production readiness or host/network independence; read the source-specific limitations below.</div>
 <h2>Learning-size curve</h2>
 <p class="muted">The selected candidate is retrained on increasing fractions of whole training groups inside each inner fold. Rising validation AP with more windows suggests more data may help; a large train–validation gap suggests overfit. This diagnostic does not use the held-out test fold.</p>
 <div class="chart"><table><thead><tr><th>Training-group fraction</th><th>Mean train windows</th><th>Mean train positives</th><th>Train AP</th><th>Grouped-CV AP ± SD</th></tr></thead><tbody>{learning_rows}</tbody></table></div>

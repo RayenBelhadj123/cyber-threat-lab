@@ -19,26 +19,131 @@ INDEX = 'cyber-features-spark-stream-v1'
 MAX_ROWS = 50_000
 
 
+class NumpyMLPDetector:
+    """Fixed 8→64→32→16→1 ReLU network; arrays only, no deserialized code."""
+    def __init__(self, arrays):
+        shapes={'mean':(8,),'scale':(8,),'w0':(64,8),'b0':(64,),
+                'w1':(32,64),'b1':(32,),'w2':(16,32),'b2':(16,),
+                'w3':(1,16),'b3':(1,)}
+        if set(arrays)!=set(shapes):
+            raise ValueError('Unsupported neural array inventory.')
+        for name,shape in shapes.items():
+            value=np.asarray(arrays[name])
+            if value.shape!=shape or value.dtype.kind!='f' or not np.isfinite(value).all():
+                raise ValueError('Invalid neural array shape, dtype or value.')
+        if not (arrays['scale']>0).all():
+            raise ValueError('Neural input scales must be positive.')
+        self.arrays=arrays
+
+    def scores(self, x):
+        a=self.arrays
+        z=((np.log1p(np.clip(np.asarray(x,dtype=float),0,None))-a['mean'])/a['scale']).astype(np.float32)
+        for index in range(4):
+            z=z@a[f'w{index}'].T+a[f'b{index}']
+            if index<3:
+                z=np.maximum(z,0)
+        return (1/(1+np.exp(-np.clip(z,-80,80)))).reshape(-1)
+
+
+SAFE_INTERNAL_TYPES = {'sklearn.tree._tree.Tree', 'sklearn.ensemble._hist_gradient_boosting.predictor.TreePredictor'}
+
+
+def _validate_detector(model, name):
+    if name == 'pytorch_mlp':
+        if type(model) is not NumpyMLPDetector:
+            raise ValueError('Unsupported neural inference object.')
+        return
+    from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier, HistGradientBoostingClassifier, IsolationForest
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import FunctionTransformer, StandardScaler
+    from sklearn.linear_model import LogisticRegression
+    families = {'extra_trees': ExtraTreesClassifier, 'random_forest': RandomForestClassifier,
+                'hist_gradient_boosting': HistGradientBoostingClassifier, 'isolation_forest': IsolationForest}
+    if name == 'prior_baseline':
+        if type(model) is not dict or set(model) != {'kind', 'probability'} or model['kind'] != name or not 0 <= model['probability'] <= 1:
+            raise ValueError('Invalid prior-baseline artifact.')
+        return
+    if name == 'logistic_regression':
+        if type(model) is not Pipeline or [type(step) for _, step in model.steps] != [FunctionTransformer, StandardScaler, LogisticRegression] or model.steps[0][1].func is not np.log1p:
+            raise ValueError('Unsupported inference preprocessing pipeline.')
+    elif name not in families or type(model) is not families[name]:
+        raise ValueError('Unsupported detector family.')
+    if name != 'isolation_forest' and list(model.classes_) != [False, True]:
+        raise ValueError('Unsupported detector positive class.')
+
+
+def export_detector(model, name, threshold, root, *, scope, source_bundle_sha256=None):
+    import skops.io as sio
+    import sklearn
+    from cyberlab.pipeline import FEATURES
+    artifact_file='detector.skops'
+    artifact_format='skops'
+    if name == 'pytorch_mlp':
+        import torch
+        if type(model) is not dict or model.get('kind')!='pytorch_mlp' or type(model['network']) is not torch.nn.Sequential:
+            raise ValueError('Unsupported training-network artifact.')
+        layers=list(model['network'].children())
+        expected=[torch.nn.Linear,torch.nn.ReLU,torch.nn.Dropout,torch.nn.Linear,torch.nn.ReLU,torch.nn.Dropout,torch.nn.Linear,torch.nn.ReLU,torch.nn.Linear]
+        if [type(layer) for layer in layers]!=expected:
+            raise ValueError('Unsupported training-network architecture.')
+        state=model['network'].state_dict()
+        arrays={'mean':model['scaler'].mean_.copy(),'scale':model['scaler'].scale_.copy()}
+        for target,index in enumerate((0,3,6,8)):
+            arrays[f'w{target}']=state[f'{index}.weight'].detach().cpu().numpy().copy()
+            arrays[f'b{target}']=state[f'{index}.bias'].detach().cpu().numpy().copy()
+        model=NumpyMLPDetector(arrays)
+        buffer=io.BytesIO()
+        np.savez_compressed(buffer,**arrays)
+        payload=buffer.getvalue()
+        artifact_file='detector.npz'
+        artifact_format='numpy_mlp'
+    else:
+        payload=sio.dumps(model)
+        if set(sio.get_untrusted_types(data=payload)) - SAFE_INTERNAL_TYPES:
+            raise ValueError('Detector export contains unsupported Python types.')
+    _validate_detector(model, name)
+    if not np.isfinite(threshold):
+        raise ValueError('Detector threshold must be finite.')
+    base=Path(root)/'report_data'
+    base.mkdir(parents=True,exist_ok=True)
+    metadata={'model_name':name,'features':list(FEATURES),'threshold':float(threshold),
+              'artifact_sha256':hashlib.sha256(payload).hexdigest(),'format':artifact_format,'artifact_file':artifact_file,
+              'sklearn_version':sklearn.__version__,'scope':scope,
+              'threshold_policy':'Frozen development OOF maximum-F1 threshold; held-out captures excluded.'}
+    if source_bundle_sha256 is not None:
+        metadata['source_bundle_sha256']=source_bundle_sha256
+    (base/artifact_file).write_bytes(payload)
+    (base/'detector_metadata.json').write_text(json.dumps(metadata,indent=2),encoding='utf-8')
+    return metadata
+
+
 def load_detector(root):
     import skops.io as sio
     import sklearn
-    from sklearn.ensemble import ExtraTreesClassifier
     base = Path(root) / 'report_data'
     metadata = json.loads((base / 'detector_metadata.json').read_text(encoding='utf-8'))
-    payload = (base / 'detector.skops').read_bytes()
+    artifact_file='detector.npz' if metadata['format']=='numpy_mlp' else 'detector.skops'
+    payload = (base / artifact_file).read_bytes()
     if hashlib.sha256(payload).hexdigest() != metadata['artifact_sha256']:
         raise ValueError('Packaged detector checksum mismatch; restore the trusted release.')
     if sklearn.__version__ != metadata['sklearn_version']:
         raise ValueError(f"Detector requires scikit-learn {metadata['sklearn_version']}; installed {sklearn.__version__}.")
-    # Static, narrowly vetted sklearn internal type, never the uploaded file's trust list.
-    allowed = {'sklearn.tree._tree.Tree'}
-    if set(sio.get_untrusted_types(data=payload)) - allowed:
-        raise ValueError('Packaged detector contains unsupported Python types.')
-    model = sio.loads(payload, trusted=list(allowed))
-    if not isinstance(model, ExtraTreesClassifier) or list(model.classes_) != [False, True]:
-        raise ValueError('Unsupported detector family or positive class.')
+    if metadata['format']=='numpy_mlp':
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            if sum(item.file_size for item in archive.infolist())>2_000_000:
+                raise ValueError('Neural array archive exceeds the safety limit.')
+        with np.load(io.BytesIO(payload),allow_pickle=False) as data:
+            model=NumpyMLPDetector({key:data[key] for key in data.files})
+    elif metadata['format']=='skops':
+        if set(sio.get_untrusted_types(data=payload)) - SAFE_INTERNAL_TYPES:
+            raise ValueError('Packaged detector contains unsupported Python types.')
+        model = sio.loads(payload, trusted=list(SAFE_INTERNAL_TYPES))
+    else:
+        raise ValueError('Unsupported inference artifact format.')
+    _validate_detector(model, metadata['model_name'])
     from cyberlab.pipeline import FEATURES
-    if metadata['features'] != FEATURES or not 0 <= metadata['threshold'] <= 1:
+    if metadata['features'] != FEATURES or not np.isfinite(metadata['threshold']):
         raise ValueError('Invalid packaged detector feature/threshold contract.')
     return model, metadata
 
@@ -63,7 +168,8 @@ def score_windows(frame, model, metadata):
         if column in frame:
             out[column] = frame[column]
     X = features if hasattr(model, 'feature_names_in_') else features.to_numpy(dtype=float)
-    out['detector_score'] = model.predict_proba(X)[:, 1]
+    from cyberlab.benchmark import _score_model
+    out['detector_score'] = model.scores(X) if metadata['format']=='numpy_mlp' else _score_model(metadata['model_name'], model, X)
     out['suspicious'] = out.detector_score >= metadata['threshold']
     out['detector'] = metadata['model_name']
     return out.reset_index(drop=True)

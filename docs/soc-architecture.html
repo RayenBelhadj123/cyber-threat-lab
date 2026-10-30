@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cyber Threat Lab — SOC Architecture</title>
+  <style>
+    :root { color-scheme: dark; --bg:#07111f; --panel:#101d2e; --panel2:#14243a; --line:#33465e; --text:#e7eef8; --muted:#9aabc0; --cyan:#63d3e8; --blue:#8aa8ff; --green:#70d6a6; --amber:#f5bd65; --purple:#c2a2ff; }
+    * { box-sizing:border-box }
+    body { margin:0; padding:34px; background:radial-gradient(ellipse at 20% 0%,#152b44 0,transparent 48%),var(--bg); color:var(--text); font:15px/1.5 "Segoe UI",system-ui,sans-serif }
+    main { max-width:1580px; margin:0 auto }
+    .eyebrow { color:var(--cyan); letter-spacing:.16em; text-transform:uppercase; font-size:11px; font-weight:700 }
+    h1 { margin:8px 0 4px; font-size:clamp(28px,4vw,44px); letter-spacing:-.035em }
+    .intro { color:var(--muted); max-width:1000px; margin:0 0 22px }
+    .canvas { overflow-x:auto; border:1px solid var(--line); border-radius:18px; background:#091624e8; box-shadow:0 24px 80px #0005 }
+    svg { display:block; width:100%; min-width:1000px; height:auto }
+    .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:16px 0 }
+    .stat,.note { border:1px solid var(--line); background:linear-gradient(135deg,var(--panel),#0c1827); border-radius:12px; padding:15px 17px }
+    .stat strong { display:block; font-size:21px; color:var(--text); letter-spacing:-.02em }
+    .stat span,.note p { color:var(--muted); font-size:13px; margin:3px 0 0 }
+    .notes { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:12px }
+    .note h2 { font-size:14px; margin:0 0 6px; color:var(--cyan) }
+    .note p { line-height:1.55 }
+    .legend { display:flex; flex-wrap:wrap; gap:16px; padding:14px 4px 0; color:var(--muted); font-size:12px }
+    .legend i { display:inline-block; width:9px; height:9px; border-radius:50%; margin-right:6px }
+    footer { color:var(--muted); font-size:12px; margin:18px 2px 0 }
+    @media(max-width:850px) { body{padding:18px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.notes{grid-template-columns:1fr} }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Cyber Threat Detection Lab · Local SOC workspace</div>
+  <h1>Evidence-first SOC architecture</h1>
+  <p class="intro">Two distinct data lanes: a verified, historical expanded benchmark for analysis, and an existing optional streaming stack whose services are checked at runtime. The dashboard never labels benchmark/replay evidence as live traffic.</p>
+  <div class="canvas">
+  <svg viewBox="0 0 1600 850" role="img" aria-labelledby="diagramTitle diagramDesc" xmlns="http://www.w3.org/2000/svg">
+    <title id="diagramTitle">Cyber Threat Detection Lab SOC platform architecture</title>
+    <desc id="diagramDesc">Eleven expanded benchmark CSVs are batch validated into an indexed SQLite store, queried by FastAPI and shown in a React SOC dashboard. Saved model evidence and a separate historical flow capture remain distinct. Kafka, Spark, Elasticsearch, Kibana, Streamlit, MongoDB and Cassandra are existing optional services whose health is probed rather than simulated.</desc>
+    <defs>
+      <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><path d="M32 0H0V32" fill="none" stroke="#1e3044" stroke-width=".7" opacity=".55"/></pattern>
+      <marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8Z" fill="#7e96b2"/></marker>
+      <marker id="arrowCyan" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto"><path d="M0 0L10 4L0 8Z" fill="#63d3e8"/></marker>
+      <style>
+        .zone{fill:#0b1726;stroke:#2a3e55;stroke-width:1.4}.ztitle{font:700 13px 'Segoe UI',sans-serif;letter-spacing:1.5px;fill:#9aabc0}.card{fill:#14243a;stroke:#405670;stroke-width:1.4}.c-cyan{stroke:#3d9bad}.c-purple{stroke:#806bb1}.c-green{stroke:#458e72}.c-amber{stroke:#a77b3c}.c-blue{stroke:#617cbf}.title{font:700 17px 'Segoe UI',sans-serif;fill:#e7eef8}.body{font:13px 'Segoe UI',sans-serif;fill:#a9b9cc}.small{font:11px 'Segoe UI',sans-serif;fill:#8fa2b9}.tag{font:700 10px 'Segoe UI',sans-serif;letter-spacing:.8px}.edge{fill:none;stroke:#7e96b2;stroke-width:2;marker-end:url(#arrow)}.edge-cyan{fill:none;stroke:#63d3e8;stroke-width:2.2;marker-end:url(#arrowCyan)}.edge-dash{fill:none;stroke:#71869f;stroke-width:1.7;stroke-dasharray:6 6;marker-end:url(#arrow)}
+      </style>
+    </defs>
+    <rect width="1600" height="850" fill="url(#grid)"/>
+    <!-- Data and analytics lane -->
+    <rect class="zone" x="22" y="28" width="1556" height="526" rx="18"/>
+    <text class="ztitle" x="48" y="59">HISTORICAL BENCHMARK · VERIFIED LOCAL EVIDENCE · NOT LIVE TRAFFIC</text>
+    <!-- Edges behind cards -->
+    <path class="edge" d="M267 150H310V205H335"/><path class="edge" d="M267 260H310V230H335"/>
+    <path class="edge-cyan" d="M575 215H625"/><path class="edge-cyan" d="M895 215H940"/><path class="edge-cyan" d="M1185 215H1230"/>
+    <path class="edge" d="M575 390H755V288"/><path class="edge" d="M895 390H920V254H940"/>
+    <path class="edge-dash" d="M1060 474V520H1080V300"/>
+    <path class="edge-dash" d="M1370 478V514H1455V300"/>
+    <!-- Cards -->
+    <rect class="card c-amber" x="48" y="105" width="219" height="95" rx="12"/>
+    <text class="tag" x="66" y="129" fill="#f5bd65">BENCHMARK SOURCE</text><text class="title" x="66" y="155">CICIDS2017</text><text class="body" x="66" y="178">8 full-week CSV files</text>
+    <rect class="card c-amber" x="48" y="218" width="219" height="95" rx="12"/>
+    <text class="tag" x="66" y="242" fill="#f5bd65">SEPARATE EXTENSION</text><text class="title" x="66" y="268">CIC-DDoS2019</text><text class="body" x="66" y="291">3 CSVs · own provenance</text>
+    <rect class="card c-blue" x="335" y="157" width="240" height="132" rx="14"/>
+    <text class="tag" x="354" y="183" fill="#8aa8ff">BATCH INGESTION</text><text class="title" x="354" y="211">Full-flow builder</text><text class="body" x="354" y="236">50k-row chunks · validation</text><text class="body" x="354" y="257">dedupe · lineage · accounting</text><text class="small" x="354" y="277">No browser-side bulk loading</text>
+    <rect class="card c-purple" x="625" y="157" width="270" height="132" rx="14"/>
+    <text class="tag" x="645" y="183" fill="#c2a2ff">LOCAL INDEX · SQLITE</text><text class="title" x="645" y="211">Full raw-flow store</text><text class="body" x="645" y="236">4.55M valid flow rows</text><text class="body" x="645" y="257">Provenance · labels · timestamps</text><text class="small" x="645" y="277">Indexed, bounded reads and aggregates</text>
+    <rect class="card c-green" x="940" y="157" width="245" height="132" rx="14"/>
+    <text class="tag" x="960" y="183" fill="#70d6a6">READ-ONLY API</text><text class="title" x="960" y="211">FastAPI</text><text class="body" x="960" y="236">Status · filters · pages · sort</text><text class="body" x="960" y="257">Stats · topology · model evidence</text><text class="small" x="960" y="277">Missing full index returns unavailable</text>
+    <rect class="card c-cyan" x="1230" y="135" width="300" height="174" rx="14"/>
+    <text class="tag" x="1251" y="162" fill="#63d3e8">REACT / TYPESCRIPT SOC</text><text class="title" x="1251" y="191">Investigation workspace</text><text class="body" x="1251" y="217">Overview · ML evidence · datasets</text><text class="body" x="1251" y="240">Historical flow search · React Flow</text><text class="body" x="1251" y="263">Health cards · evidence drill-down</text><text class="small" x="1251" y="289">No fabricated events or live claims</text>
+    <rect class="card c-blue" x="335" y="345" width="240" height="98" rx="12"/>
+    <text class="tag" x="354" y="369" fill="#8aa8ff">SAVED EXPERIMENTS</text><text class="title" x="354" y="395">Model artifacts</text><text class="body" x="354" y="420">Metrics · confusion · AP curve</text>
+    <rect class="card c-amber" x="625" y="345" width="270" height="98" rx="12"/>
+    <text class="tag" x="645" y="369" fill="#f5bd65">SEPARATE LEGACY EVIDENCE</text><text class="title" x="645" y="395">Thursday flow capture</text><text class="body" x="645" y="420">170,217 flows · not full benchmark</text>
+    <rect class="card" x="940" y="345" width="245" height="131" rx="12"/>
+    <text class="tag" x="960" y="369" fill="#9aabc0">RUNTIME HEALTH PROBES</text><text class="body" x="960" y="395">Elasticsearch · Kibana</text><text class="body" x="960" y="417">Kafka · Spark · Streamlit</text><text class="small" x="960" y="449">Reachability ≠ ingestion or freshness</text>
+    <rect class="card c-cyan" x="1230" y="345" width="300" height="133" rx="12"/>
+    <text class="tag" x="1251" y="369" fill="#63d3e8">EXISTING REPORTING APP</text><text class="title" x="1251" y="397">Streamlit workspace</text><text class="body" x="1251" y="422">Read-only benchmark + bounded analysis</text><text class="small" x="1251" y="449">Linked separately; status is probed live</text>
+    <text class="small" x="48" y="514">Separate raw-flow rows (4,553,532) from aggregated feature windows (197,941); experiment metrics never become synthetic flow events.</text>
+    <!-- Existing stream processing lane -->
+    <rect class="zone" x="22" y="582" width="1556" height="240" rx="18"/>
+    <text class="ztitle" x="48" y="613">EXISTING OPTIONAL PROCESSING STACK · SERVICES ARE NOT SIMULATED BY THE SOC UI</text>
+    <rect class="card c-amber" x="70" y="652" width="205" height="105" rx="13"/><text class="tag" x="90" y="678" fill="#f5bd65">REPLAY / PRODUCER</text><text class="title" x="90" y="706">Kafka</text><text class="body" x="90" y="731">cyber-flows topic</text>
+    <rect class="card c-blue" x="350" y="652" width="205" height="105" rx="13"/><text class="tag" x="370" y="678" fill="#8aa8ff">PROCESSING</text><text class="title" x="370" y="706">Spark</text><text class="body" x="370" y="731">batch + streaming</text>
+    <rect class="card c-purple" x="650" y="638" width="240" height="132" rx="13"/><text class="tag" x="670" y="665" fill="#c2a2ff">SEARCH / DASHBOARDS</text><text class="title" x="670" y="693">Elasticsearch</text><text class="body" x="670" y="716">Kibana · historical indices</text><text class="small" x="670" y="741">Full-flow SQLite is separate</text>
+    <rect class="card" x="1010" y="652" width="205" height="105" rx="13"/><text class="tag" x="1030" y="678" fill="#9aabc0">PERSISTENCE</text><text class="title" x="1030" y="706">MongoDB</text><text class="body" x="1030" y="731">optional store</text>
+    <rect class="card" x="1300" y="652" width="205" height="105" rx="13"/><text class="tag" x="1320" y="678" fill="#9aabc0">PERSISTENCE</text><text class="title" x="1320" y="706">Cassandra</text><text class="body" x="1320" y="731">optional store</text>
+    <path class="edge" d="M275 705H350"/><path class="edge" d="M555 705H650"/><path class="edge" d="M890 705H1010"/><path class="edge" d="M890 726H1290V705H1300"/>
+    <text class="small" x="70" y="790">The streaming path is only live when real services and producers are configured and healthy; historical benchmark/replay remains explicitly labeled.</text>
+  </svg>
+  </div>
+  <div class="legend"><span><i style="background:#f5bd65"></i>Source / historical evidence</span><span><i style="background:#c2a2ff"></i>Indexed data store</span><span><i style="background:#70d6a6"></i>API layer</span><span><i style="background:#63d3e8"></i>User interfaces</span><span><i style="background:#8aa8ff"></i>Batch / model processing</span></div>
+  <section class="stats" aria-label="Verified expanded benchmark counts">
+    <div class="stat"><strong>4,610,049</strong><span>input records ingested and accounted</span></div>
+    <div class="stat"><strong>4,553,532</strong><span>valid raw flows indexed and explorable</span></div>
+    <div class="stat"><strong>197,941</strong><span>aggregated feature windows · separate entity</span></div>
+    <div class="stat"><strong>4.77 GB</strong><span>local SQLite flow-store file · not committed</span></div>
+  </section>
+  <section class="notes">
+    <article class="note"><h2>Provenance boundaries</h2><p>The full-week CICIDS2017 benchmark and separately downloaded CIC-DDoS2019 extension retain distinct dataset identities. The 170,217-flow Thursday capture remains a legacy historical view and is never a fallback for the expanded index.</p></article>
+    <article class="note"><h2>Actual service health</h2><p>API health probes show reachability at request time. A healthy TCP/HTTP check does not prove stream ingestion, Kafka lag, Spark throughput, or data freshness. Unreachable services are shown unavailable, not simulated.</p></article>
+    <article class="note"><h2>Architecture limits</h2><p>Full-flow exploration currently uses the verified local SQLite index, not a full-benchmark Elasticsearch index. Per-flow model predictions, grounded AI explanations, reviewed ATT&amp;CK mappings, and Sigma execution are not represented as implemented.</p></article>
+  </section>
+  <footer>Architecture reflects the local project implementation. Runtime service state is volatile; use the SOC health endpoint for current checks. Full data is kept local and excluded from Git.</footer>
+</main>
+</body>
+</html>
